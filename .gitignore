@@ -1,0 +1,74 @@
+# Confidential data — never commit
+tables/
+pitch_review/
+pitch_review_simulation/
+guidelines/
+
+# Original draft papers (kept locally; v2 versions ship in their place — see edit_plan.md)
+# Uncomment if/when the originals are intentionally re-included:
+# 1\ LENS_*.md
+# 2\ The\ Platform\ Paradox*.md
+# 3.\ Instruction\ Distillation*.md
+
+# Secrets
+.env
+.env.local
+*.key
+*.pem
+credentials*.json
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs and tooling
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Local scratch
+scratch/
+tmp/
+*.tmp
