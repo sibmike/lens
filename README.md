@@ -8,15 +8,11 @@ A research trilogy formalizing how multi-stage human selection systems work and 
 - **Paper 2 — The Platform Paradox: When Angels with Architecture Outperform Elite VCs.** Validates LENS via 2,200 Monte Carlo configurations across eleven investor archetypes. Headline: a platform-enabled angel achieves 3.91% portfolio quality, beating elite VCs (3.51%) and outperforming solo angels (1.50%) by 160%. Architecture beats individual ability. Simulation.
 - **Paper 3 — Instruction Distillation for Startup Pitch Ranking.** Operationalizes the AI filter in Paper 2 with real LLMs (Claude, GPT-4) ranking 35 startups; achieves NDCG@20 = 0.923 against expert consensus. Empirical.
 
-[`lens_trilogy.md`](lens_trilogy.md) is the integrated reading guide — the conceptual through-line, per-paper one-pagers, shared symbol table, and known weaknesses.
-
 ## Repository layout
 
 ```
 .
 ├── README.md                              ← you are here
-├── lens_trilogy.md                        ← integrated synthesis of all three papers
-├── edit_plan.md                           ← editorial checklist
 ├── papers/
 │   ├── paper1_lens.md                     ← Paper 1: framework
 │   ├── paper2_platform_paradox.md         ← Paper 2: simulation
@@ -26,6 +22,8 @@ A research trilogy formalizing how multi-stage human selection systems work and 
     ├── requirements.txt
     ├── data/                              ← anonymized inputs (no startup identities)
     ├── shared/                            ← canonical perception model
+    ├── tools/
+    │   └── anonymize.py                   ← documents the anonymization process
     ├── paper1_calibration/
     ├── paper2_simulation/
     └── paper3_llm_eval/
