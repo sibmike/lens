@@ -1,714 +1,263 @@
-# Instruction Distillation for Startup Pitch Ranking: LLMs as Scalable First-Pass Filter
+# Instruction Distillation for Startup Pitch Ranking: LLMs as a Scalable First-Pass Filter
 
-*AI-Driven Meritocracy: Enhancing Venture Capital Decisions with Large Language Models*
+**Mikhail L. Arbuzov, Lee Mosbacker**
 
-**Authors:** Mikhail L. Arbuzov, Lee Mosbacker
-**Affiliation:** Cyrannus Inc.
-**Date:** 2025
-**Corresponding author:** [to be filled]
+*Cyrannus Inc., 2025. Third paper in the LENS trilogy. Paper 1 introduces the perception-model framework. Paper 2 demonstrates through Monte Carlo simulation that selection architecture beats individual evaluator skill. This paper instantiates Paper 2's idealized AI-filter stage in a working system: a large language model, prompted via instruction distillation, ranks one-minute startup pitches in alignment with a ten-expert crowd at NDCG@20 = 0.923.*
 
-**Keywords:** Venture Capital, Startup Screening, Large Language Models, AI-Augmented Decision Making, Expert Evaluation, Investment Efficiency, Cognitive Bias Mitigation, Meritocratic Investment
+---
 
 ## Abstract
 
-With rising global startup activity, traditional venture capital evaluation methods face significant efficiency and consistency challenges, leading to suboptimal resource allocation and biased investment outcomes. This study introduces an innovative use of Large Language Models (LLMs) designed specifically to augment expert-driven startup evaluation by systematically ranking pitches. Through experiments involving 35 startups evaluated by a diverse expert panel, we implemented and compared sophisticated LLM prompting techniques, achieving exceptional alignment with expert rankings (NDCG@20 = 0.923). Our central contribution lies in leveraging LLMs as sophisticated pitch quality filters, explicitly delineating presentation effectiveness from intrinsic business value. This method dramatically streamlines initial screening processes, cuts expert workloads in half, and establishes consistent evaluation benchmarks while enabling scalable, objective assessments. Crucially, our instruction-distillation framework captures implicit expert evaluation criteria without manual specification, significantly reducing bias towards superficial presentation qualities. The results underline the potential of strategically deployed AI systems to create a more efficient, unbiased, and meritocratic venture capital landscape, enhancing expert focus on truly promising ventures.
+Early-stage venture screening has a structural problem. Expert reviewers are scarce; pitch volume is not. The reviewers who do read pitches are demonstrably influenced by presentation polish — charisma, fluency, slide design — rather than by the substance the pitch is supposed to convey, and that influence persists even when reviews are aggregated across a panel. The result is a screening process that consumes the costliest input (expert time) on the cheapest signal (pitch craft).
 
-> **Data availability.** The underlying startup data — names, transcripts, founder contact information — is confidential and not shared. All analyses use anonymized derivatives in [`code/data/`](code/data/), where each startup is identified by a stable opaque ID (S001…S117). Anonymized rankings are sufficient to reproduce the NDCG results reported below; the canonical results table is [`code/data/ai_reviews_research_anon.csv`](code/data/ai_reviews_research_anon.csv) and the reproduction script is [`code/paper3_llm_eval/aggregate_ndcg.py`](code/paper3_llm_eval/aggregate_ndcg.py).
+This paper shows that a large language model can do most of the pitch-craft filtering and leave the substantive evaluation to humans. We rank 35 anonymized startup pitches from the Cyrannus platform under four prompting strategies and two model providers (Anthropic Claude, OpenAI GPT-4), with a ten-expert consensus as ground truth. The component-based prompt with Claude reaches NDCG@10 = 0.908 on a single run; ensemble averaging across all available prompt strategies reaches NDCG@20 = 0.923. The model never replaces the expert; it eliminates the obviously unsuitable pitches and frees the expert to evaluate substance.
 
-> **Sample size.** N = 35 is sufficient as a proof-of-concept that the methodology produces a real signal (NDCG@20 = 0.923 against a 10-expert ground truth is not noise) but is insufficient for strong external validity. A larger-N replication is the natural follow-up and is out of scope for this paper.
+The methodological contribution is *instruction distillation*: rather than asking experts to articulate their criteria — which they typically cannot do precisely — we have an LLM read pairs of (pitch, expert review) and reverse-engineer the implicit rubric the panel was applying. The result is a structured prompt that captures the panel's collective methodology without requiring any expert to write it down.
 
-# 1. Introduction
+> **Data availability.** Underlying startup data is confidential. All analyses use anonymized derivatives in [`code/data/`](../code/data/). The script that reproduces every NDCG number in this paper is [`code/paper3_llm_eval/aggregate_ndcg.py`](../code/paper3_llm_eval/aggregate_ndcg.py).
+>
+> **Sample size.** N = 35 is sufficient as a proof-of-concept that the approach produces a real signal — NDCG@20 = 0.923 against a ten-expert ground truth is not noise at this N — but it is insufficient for strong external validity. A larger-N replication is the natural follow-up paper and is out of scope here.
 
-## 1.1 Context and Background
+**Keywords:** venture capital, startup screening, large language models, instruction distillation, NDCG, AI-augmented evaluation, scalable expert review.
 
-The early-stage venture capital ecosystem faces growing challenges of scale and consistency as the startup landscape expands globally. Venture capital firms must efficiently evaluate increasing numbers of investment opportunities while operating with limited expert resources (Gompers & Lerner, 2001). This evaluation process is particularly challenging during initial screening, where decisions must be made with minimal information and substantial uncertainty (Petty & Gruber, 2011). Research has demonstrated that cognitive biases and varying evaluation standards among reviewers can lead to inconsistent assessments, potentially missing promising opportunities or advancing suboptimal ventures (Brooks et al., 2014).
+---
 
-The fundamental challenge in early-stage investment lies in distinguishing "pitch quality" from "startup quality" (Clark, 2008). Pitch quality refers to how effectively founders communicate their ideas, while startup quality encompasses the actual viability of the business model, team capabilities, and market opportunity. Recent studies show that investors' screening decisions are significantly influenced by presentation skills, sometimes overshadowing substantive business merits (Pollack et al., 2012). This disconnect can lead to misleading assessments, where well-presented but fundamentally weak startups advance while promising ventures with less polished presentations are overlooked.
+## 1. The Problem
 
-## 1.2 Cyrannus Platform and Current Process
+The early-stage venture process at every well-known platform looks roughly the same. A pool of applicants is reduced to a top fraction through one or two rounds of expert review, and the survivors enter due diligence. The expert review is where the bottleneck lives. Each pitch demands real cognitive work, the experts are scarce, and the work does not scale: doubling the applicant pool roughly doubles the expert hours required to maintain the same selection quality.
 
-This research examines Cyrannus, an AI-powered venture evaluation platform that employs a multi-stage, expert-driven approach to startup assessment. Unlike traditional binary classification approaches to startup evaluation, Cyrannus operates a ranking system powered by independent expert reviewers. The current evaluation methodology consists of three distinct phases:
+The bottleneck is not the only problem. The expert review is also systematically biased toward presentation. A polished founder with a clean narrative gets credit for a business that the same expert, reading the same content in plainer form, might rate lower. A team with strong fundamentals but a stumbling speaker gets penalized for the stumble. This is well-documented across the entrepreneurship literature; the most pointed result is from Brooks et al. (2014), who found identical pitches scored substantially higher when delivered by attractive men. Pollack et al. (2012) document the broader pattern. Clark (2008) names the underlying confound: *pitch quality* (how well the founder communicated) is observable; *startup quality* (whether the business will work) is what investors actually want, and the two get conflated under time pressure.
 
-1. **Pre-selection.** Dedicated Venture Scouts identify and invite promising startups to apply for funding consideration.
-2. **Initial Screening.** Selected startups submit one-minute video pitches, which are evaluated by a diverse panel of at least 10 independent expert reviewers. These domain specialists each employ their own methodology to rank startups and provide qualitative feedback to founders. Experts operate independently without access to others' reviews, creating a "wisdom of crowds" effect that helps mitigate individual biases.
-3. **Due Diligence.** The top 20% of ranked startups advance to a comprehensive due diligence phase, where a minimum of 20 expert reviewers examine five additional videos from each startup. Ultimately, only the top 5% of all applicants receive investment offers.
+Aggregating across a panel does not fix this. A ten-person committee reduces random disagreement, but if every member is susceptible to the same pitch-quality cue — and they are — the aggregate score still reflects the cue rather than the substance. This is the committee paradox of Paper 1: averaging cancels noise, not correlated bias. The fix has to come from architecture, not from adding more reviewers.
 
-While this approach provides a thorough evaluation, it creates significant resource challenges and potential bottlenecks as application volumes increase. The process requires a substantial time commitment from domain experts and may delay feedback to founders awaiting investment decisions.
+The architectural opening is that pitch quality is the cheap thing to filter on. A large language model can read a transcript and tell whether the founder named a market, named a number, named a credential, named a customer. That is not the question of whether the business will work — that question requires domain expertise the model does not have. But it *is* the question of whether the pitch contains the basic content an expert would otherwise have to extract from polish. If the model can be made to filter on substantive content rather than on the polish that wraps it, it does the work the expert is currently spending most of their time on, leaving the expert to evaluate the things the model cannot.
 
-## 1.3 Problem Statement
+This paper shows that an LLM can be made to do that filtering at NDCG@20 = 0.923 against a ten-expert ground truth. The body of the paper develops the methodology, presents the empirical results, and unpacks the error analysis — the cases where the model and the expert disagree, which are themselves informative about what each is doing.
 
-Despite the benefits of independent reviews from diverse expert panels in reducing personal biases and groupthink, several persistent challenges remain. Even with multiple independent reviewers, experts remain susceptible to the influence of presentation quality and founder charisma during their assessments. This susceptibility creates a systematic bias where review quality is affected by factors unrelated to business fundamentals.
+---
 
-Additionally, when a promising startup submits a poorly constructed pitch, it typically receives a low ranking based primarily on presentation deficiencies rather than business potential. This results in valuable expert time being allocated to providing pitch improvement feedback rather than assessing underlying startup quality — an inefficient use of limited resources.
+## 2. Background and Position in the Literature
 
-The venture capital screening process, particularly at the initial stages, faces four interrelated challenges:
+The relevant literature splits along two dimensions: prior work on AI in venture screening (which is sparse and oriented toward later-stage companies with quantifiable metrics), and prior work on LLM-as-evaluator more generally (which is much richer but rarely targeted at ranking under expert ground truth).
 
-1. **Resource Limitations.** The scarcity and high opportunity cost of expert reviewer time constrain the number of startups that can be thoroughly evaluated.
-2. **Consistency Barriers.** Human reviewers may apply inconsistent standards or be influenced by cognitive biases such as anchoring, confirmation bias, or pattern recognition based on past successes.
-3. **Scalability Constraints.** As application volumes grow, maintaining evaluation quality becomes increasingly difficult without proportional increases in expert resources.
-4. **Feedback Efficiency.** The time required for comprehensive human review creates delays in providing founders with actionable insights, potentially impeding startup development and refinement.
+The early-stage problem has been mostly closed to algorithmic methods because the inputs are unstructured and the outcome is observable only on a multi-year lag. Bernstein, Korteweg & Laws (2017) and Cumming & Groh (2018) document that data-driven methods in VC have concentrated on later-stage decisions where revenue and growth provide structured signal. Earlier attempts at NLP-based screening (Tam & Kiang, 2012; Serrano, 2010; Hochberg, Ljungqvist & Lu, 2007) used narrow training sets or rule-based pipelines with limited capacity for the qualitative judgment early-stage evaluation requires. More recent work has moved toward unstructured text: Maarouf, Feuerriegel & Pröllochs (2024) combine textual self-descriptions with structured features to predict startup success at scale on Crunchbase data, and Yankov, Ruskov & Haralampiev (2014) score on team and market dimensions to predict five-year survival. These are predictive models trained on outcome labels; they do not address the screening-stage problem of ranking pitches against an expert panel before any outcome is observable.
 
-These challenges are particularly acute in platforms like Cyrannus that rely on distributed expert networks for evaluation. The quality of early-stage investment decisions directly impacts both portfolio performance for investors and funding opportunities for entrepreneurs.
+LLMs change what is possible at the screening stage because they can do the qualitative reading that earlier NLP could not. Brown et al. (2020) and OpenAI (2023) document the general jump in capability; Davenport & Ronanki (2018) survey the practical implications across business domains. But LLMs are not domain experts. They cannot replicate the pattern recognition of an investor who has seen a thousand decks; what they can do, reliably, is identify whether the surface content of a pitch contains what an expert would look for. Bender et al. (2021) is the canonical caveat: models fluent in form are not necessarily competent in substance, and the right deployment treats them as scalable filters rather than as autonomous decision-makers.
 
-## 1.4 Research Objectives and Contribution
+Chiang & Yin (2021) is the closest methodological precedent: people defer to a model appropriately when they understand its limits and adjust reliance accordingly. That framing — the model as a calibrated filter, the expert as the final decision-maker, with the architectural property that the model never sees a pitch the expert will not also see — is the framing this paper inherits. The contribution is not "LLMs can rank pitches" in isolation; it is that an LLM filter, prompted with a methodology distilled from the expert panel itself, can do the pitch-quality work at scale and free the expert to do startup-quality work where their judgment actually adds value.
 
-This research aims to address these challenges by developing and validating an LLM-powered system for startup pitch ranking. Our specific contributions are:
+The hybrid evaluation framing has been argued for in the broader AI-in-investment literature (Deloitte, 2021), but the published industry tools (Kamps, 2023, is the recent example) target founders rather than investors and are proprietary in their criteria. To the authors' knowledge, no prior work reports a system that systematically ranks startup pitches against an expert-crowd ground truth in a multi-stage screening pipeline. That is the gap this paper fills.
 
-1. **Creating a debiased ground truth** based on expert panel reviews by leveraging multiple independent evaluations to establish a robust ranking baseline.
-2. **Deriving a consistent review methodology** that reflects the collective wisdom of expert reviewers while minimizing individual biases.
-3. **Developing an LLM-based ranking approach** that achieves high correlation with expert consensus rankings while maintaining consistent evaluation criteria.
-4. **Implementing a first-pass filtering system** that can rank startups at scale while preserving quality assessment.
-5. **Establishing a feedback mechanism** that improves average pitch quality prior to human expert review, allowing experts to focus on evaluating startup quality rather than pitch delivery.
+---
 
-Our research aligns directly with the challenges identified in the problem statement, framing startup selection as a ranking problem rather than a binary classification task. This perspective better reflects real-world investment processes where resources must be allocated to the most promising opportunities among many potential candidates.
+## 3. Methodology
 
-By developing a novel approach to automated pitch evaluation that explicitly distinguishes between pitch quality and startup quality, we address a fundamental challenge in early-stage investment. The resulting system significantly improves the efficiency, consistency, and fairness of the startup screening process, with implications for both venture capital firms and the broader entrepreneurial ecosystem.
+### 3.1 The Cyrannus Pipeline and the Sample
 
-# 2. Background and Literature Review
+This study runs against the Cyrannus platform's existing screening process. Founders submit one-minute video pitches. A panel of at least ten independent expert reviewers — drawn from a larger pool of more than fifty domain specialists — scores each pitch using their own rubric, blind to one another's scores. The aggregate of those scores is the pitch's ranking; the top fraction advances to due diligence, where a larger panel evaluates additional materials, and only the top few percent receive investment offers. Experts are incentivized through equity stakes in funded startups, which is the closest available approximation to skin-in-the-game evaluation at the screening stage.
 
-## 2.1 Traditional Venture Capital Screening and Challenges
+We took 35 anonymized startups from this pipeline as the evaluation sample. (The original collection was 40; five were excluded for incomplete transcripts or for moderation flags on the underlying video. The exclusion is a bookkeeping decision, not a selection on outcome.) These startups were actively raising their first funding round at the time of evaluation. They sit at the technological frontier in their respective verticals — fintech, healthcare, enterprise software, consumer technology — which means there was no published outcome data for the LLM to leak from prior training. Each startup had received scores from at least ten expert reviewers, and the aggregate of those scores is the ground truth this paper benchmarks against.
 
-The traditional venture capital (VC) screening process relies primarily on expert judgment and pattern recognition, often characterized as the "art" of venture investing rather than systematic science (Gompers & Lerner, 2001). Venture capitalists typically evaluate startups based on market potential, competitive differentiation, and team capability (Sahlman, 1990). While this human-centered methodology has been the industry standard for decades, it faces significant limitations in scaling to high-volume application environments as the global startup ecosystem expands (Bonini & Capizzi, 2019).
+The sample is small. N = 35 is enough to demonstrate that a methodology produces a real signal — 0.923 against a ten-expert ground truth is not noise at this size — but it is not enough to support strong external generalizations. A larger replication is the obvious next paper. We say this once, here, rather than threading the caveat through the rest of the document.
 
-Resource constraints in traditional screening create operational bottlenecks when deal flow increases, primarily due to limited expert availability and the time-intensive nature of thorough due diligence (Kollmann & Kuckertz, 2010). Furthermore, human evaluation introduces reviewer biases and inconsistencies that affect investment decisions (Brooks et al., 2014; Petty & Gruber, 2011). Cognitive biases — including overconfidence, anchoring, and pattern-matching based on prior successes — can lead to skewed evaluations, undermining the fairness and reliability of screening decisions.
+### 3.2 Instruction Distillation
 
-While bringing together multiple diverse experts to review opportunities theoretically helps mitigate individual cognitive biases, this approach further increases the time and resources required for evaluation. This creates a practical ceiling on how many startups can be thoroughly assessed, regardless of the potential quality of opportunities in the pipeline.
+The core methodological move is how the LLM is given its evaluation criteria. The standard approach — interview experts, write a rubric, hand the rubric to the model — fails twice over. Experts cannot articulate their criteria precisely; what they tell you in an interview is a rationalization of what they are actually doing. And even when they can, ten experts produce ten different rubrics, none of which represents the consensus the aggregate score reflects.
 
-## 2.2 The Pitch Quality vs. Startup Quality Dilemma
+Instruction distillation reverses the direction. We give the LLM pairs of (pitch transcript, expert review) and ask it to produce a structured analysis of each pitch — what the expert noticed, what the expert seemed to weight, where the pitch fell short, what an improvement would look like. The LLM is now doing the rationalization, but it is doing it on observed data rather than on memory. After several dozen of these analyses, we have the LLM read across them and extract the patterns: which features recur as drivers of high scores, which recur as drivers of low scores, what the implicit weighting looks like. The output of this second pass is a methodology document — a structured prompt, in the language the LLM speaks — that captures the panel's collective rubric without any expert having had to write it down.
 
-Research consistently documents how expert reviewers often conflate "pitch quality" with "startup quality" in their evaluations (Brooks et al., 2014; Pollack et al., 2012). Presentation elements such as delivery style, speaker charisma, and pitch polish can exert disproportionate influence on reviewers' perceptions, sometimes overshadowing more substantial considerations like market viability or team competence. This phenomenon leads reviewers to function inadvertently as evaluators of communication effectiveness rather than business potential.
+This is *instruction distillation*. The name is a deliberate echo of model distillation (training a small model to imitate a large one), but the object distilled is not a network; it is a procedure. The distilled methodology is then used as a system prompt in the actual ranking experiments, which is what the rest of this paper measures.
 
-Unfortunately, this challenge cannot be fully mitigated even with group reviews by independent experts, as all experts are subject to this same bias. When a pitch is objectively poor in terms of explaining essential information about the startup, experts inevitably fall back to reviewing the pitch rather than the opportunity itself. High variance in pitch quality thus amplifies noise in what is already a low-signal environment, making it more difficult to identify truly promising ventures beneath potentially poor presentations.
+The distilled methodology resolved into four assessment criteria the panel was implicitly weighting: market potential (the clarity and significance of the problem and the size of the addressable market), solution viability (whether the proposed solution makes logical sense and has competitive defensibility), team capability (whether the founders' backgrounds map credibly onto what the venture requires), and initial traction (whether there is concrete evidence of validation — users, revenue, partnerships, or pilot results). Each criterion came with specific evaluation questions derived from the patterns the LLM identified across the (pitch, review) pairs.
 
-Our research reveals a notable correlation between human panel rankings and rankings generated by Large Language Models (LLMs) when evaluating one-minute startup pitches. This correlation suggests that both human experts and LLMs respond to similar textual and presentational cues, indicating that "pitch quality" and "startup quality" become intertwined in early-stage evaluations. This insight suggests that initial screening processes might be more effective when explicitly designed to separate these dimensions, effectively delegating LLMs to assess pitch quality so that humans may focus on substance rather than form.
+### 3.3 The Four Prompting Setups
 
-## 2.3 Evolution of AI in Investment Decision Support
+To isolate which features of the prompt actually drive ranking quality, we tested four prompting strategies of increasing structure. We label them s1 through s4 in the order they appear in the results tables; describing them in increasing order of scaffolding makes the comparison interpretable.
 
-Over the past decade, venture capital firms have increasingly adopted data-driven methods to complement human expertise in investment decisions. However, these approaches have predominantly targeted later-stage companies with established metrics such as revenue growth and user adoption that can be quantitatively analyzed (Bernstein et al., 2017; Cumming & Groh, 2018). Early-stage startups, which typically lack extensive financial or operational data, present greater challenges for algorithmic assessment, forcing investors to rely on qualitative judgments.
+The least-structured setup (s4, "minimal guidance") gives the model the pitch transcript, the role of "venture scout," and a one-to-five rating scale, and asks for a single overall score with a confidence rating. There is no methodology, no chain-of-thought, no decomposition. This is the no-scaffolding baseline against which every other setup is compared.
 
-The development of natural language processing (NLP) techniques expanded possibilities for analyzing qualitative startup data, including pitch decks, business plans, and patent filings (Tam & Kiang, 2012; Serrano, 2010). However, earlier NLP approaches often employed narrow training datasets or rigid rule-based algorithms that limited their ability to capture nuanced indicators of early-stage venture potential (Hochberg et al., 2007).
+The chain-of-thought setup (s3) adds an explicit instruction to reason step-by-step before scoring: walk through market, solution, team, traction; identify the strongest and weakest aspects of the pitch; then assign the rating. The setup tests whether the act of forcing intermediate reasoning improves final ranking quality. As we discuss below, the canonical results table for this paper does not include s3 data, due to a logging error during the experiment run; the prompt itself is preserved in the supplementary materials and the experiment is straightforward to replicate.
 
-Conventional prediction methods have utilized structured approaches such as scorecards and standardized questionnaires to bring objectivity to startup evaluation. Yankov et al. (2014) developed a model evaluating startups on dimensions including team composition, product viability, market opportunity, and financial projections to predict five-year survival rates. While providing some structure, these approaches often suffer from limited scope and reliance on small sample sizes.
+The guided-methodology setup (s2) drops the full distilled methodology into the prompt and asks the model to produce a single overall score using the methodology as system context. This is the setup that tests whether the methodology helps when it is provided as a single document rather than enforced through structural decomposition.
 
-More recent research has shifted toward analyzing unstructured data using natural language processing. Textual data from startup descriptions on platforms like Crunchbase have been used to train predictive models that can classify eventual successes versus failures with promising accuracy. Advancing this approach, Maarouf et al. (2024) implemented a "fused" modeling technique that combines textual self-descriptions with fundamental variables such as founder count and prior funding. These studies confirm that founders' narratives contain latent signals about startup quality.
+The component-based setup (s1) is the most structured. It runs four separate LLM calls per pitch, one per criterion, each with its own copy of the methodology focused on the one criterion under evaluation. The four scores are then combined via a weighted average. The decomposition is the architectural prediction from Paper 1 brought into the prompt: separate evaluation reduces the tendency for one cue to dominate the others.
 
-## 2.4 Emergence and Capabilities of Large Language Models
+Two model providers were used for each setup: Anthropic's Claude and OpenAI's GPT-4. Each (setup, model) combination was run twice to allow ensemble averaging. The result is up to sixteen score columns per startup (four setups × two models × two runs), against the ten-expert aggregate as ground truth. The complete prompts live in [`code/paper3_llm_eval/prompts/`](../code/paper3_llm_eval/prompts/).
 
-Large Language Models (LLMs) such as GPT-4, Claude, and similar systems represent a significant advancement in natural language processing capabilities (Brown et al., 2020; OpenAI, 2023). These models demonstrate sophisticated performance in text classification, sentiment analysis, and summarization tasks, enabling more nuanced assessments of market opportunities, business feasibility, and team capabilities (Davenport & Ronanki, 2018). Their ability to process textual information at scale makes them particularly valuable for screening large volumes of startup applications.
+### 3.4 Evaluation Metric
 
-However, LLMs function primarily as advanced textual processors rather than equivalents to domain experts with specialized knowledge. While they excel at identifying surface-level weaknesses in pitches, such as logical inconsistencies, missing information, or contradictions, they cannot fully replicate the nuanced, domain-specific reasoning of experienced investors (Bender et al., 2021). Consequently, LLM-based screening is most effectively positioned as a complementary filter that enhances, rather than replaces, human judgment in the investment process.
+We report Normalized Discounted Cumulative Gain at three cutoffs: NDCG@10, NDCG@20, NDCG@35. NDCG penalizes ranking errors more heavily near the top of the list, which is the right shape for an investment-screening problem where the top of the ranking is what actually gets acted on. We use the exponential-gain formulation, $\mathrm{gain}_i = 2^{\mathrm{expert\_score}_i} - 1$, with a $\log_2(\mathrm{rank} + 1)$ discount. The reproduction script is [`code/paper3_llm_eval/aggregate_ndcg.py`](../code/paper3_llm_eval/aggregate_ndcg.py); every NDCG number in this paper comes from running it against [`code/data/ai_reviews_research_anon.csv`](../code/data/ai_reviews_research_anon.csv).
 
-## 2.5 LLMs as Pitch Quality Filters: Reducing Cognitive Load and Bias
+We also report precision and recall at the top-20 cutoff, treating the expert top-20 as the positive class. These are easier to interpret operationally — they tell an investor what fraction of the LLM's top-20 they would have chosen anyway, and what fraction of their own picks the LLM identifies — and they correlate strongly with NDCG without replacing it.
 
-Recent work shows that people's judgements can align closely with ML recommendations when they understand the model's limits and adjust reliance accordingly (Chiang & Yin, 2021). This finding suggests that implementing an LLM-based pre-filter to screen for a foundational level of pitch quality can ensure that only pitches meeting a certain quality threshold advance to human expert review.
+---
 
-This approach offers multiple advantages. First, it reduces reviewer cognitive load by eliminating the need for human experts to evaluate poorly structured or inadequately developed pitches. Experts effectively become startup reviewers rather than expensive pitch reviewers, conserving their limited attention for substantive due diligence on more promising ventures. Second, it mitigates superficial bias by ensuring all pitches in the evaluation pipeline meet minimum clarity standards, allowing experts to focus on fundamental factors rather than being influenced by presentation polish.
+## 4. Results
 
-Third, this methodology potentially lowers false negatives in the screening process. Startups filtered out at the LLM stage can receive structured, automated feedback for pitch improvement, creating an opportunity to refine their presentations and resubmit in future application cycles (Hallen & Eisenhardt, 2012). This not only reduces the cost of false negatives but also improves the probability of true positives, as truly outstanding startups with initially poor presentations can perfect their pitches to have an equal chance during human review. Finally, LLMs provide consistency at scale, applying uniform criteria to thousands of pitches without experiencing the fatigue or judgment shifts that affect human evaluators reviewing multiple pitches sequentially.
+### 4.1 Score Distribution and Model-Provider Differences
 
-## 2.6 Toward a Hybrid Evaluation Model
+Before discussing rankings, the scores themselves carry a finding: when the model has no methodology to anchor against, both providers compress their score distributions, but they compress in different ways. OpenAI without a methodology assigns a score of four to roughly eighty percent of the pitches, which is functionally a refusal to differentiate. Anthropic without a methodology spreads the scores more, but still less than under the structured setups. Adding the distilled methodology spreads both distributions to something closer to what the human expert panel produced — wider, with meaningful mass at the lower scores.
 
-Our analysis of the literature suggests that a hybrid model combining LLM-driven filtering for pitch quality with human-led assessments of startup quality can yield a more efficient and equitable screening process (Deloitte, 2021). In this framework, LLMs serve a critical function in processing high-volume, text-heavy submissions, filtering out clearly unsuitable candidates, and reducing the influence of surface-level presentational factors. This approach preserves human experts' limited bandwidth for deeper evaluation of substantive factors.
+The implication is that prompt structure is doing more than guiding the model's reasoning; it is also overriding a default tendency toward positivity, especially for OpenAI. This is consistent with the broader observation that models trained with instruction-following and helpfulness objectives are biased toward agreeable outputs, and that it takes deliberate prompt engineering to extract honest negative judgments. For the specific application of pitch ranking, the practical consequence is that any single-model deployment needs to be score-normalized before its outputs are comparable to a human panel.
 
-Our approach crucially differs from prior models: we view startup selection as a ranking problem rather than a binary classification task. We benchmark LLM performance not on binary classification accuracy but by comparing LLM rankings against expert-crowd rankings — a fundamentally different perspective that better reflects how investment decisions actually function in practice. While industry efforts to automate pitch deck analysis exist, such as Kamps' (2023) system that generates detailed commentary on pitch decks, these tools are typically proprietary and designed primarily to assist founders rather than to support investor decision processes.
+### 4.2 Ranking Accuracy
 
-To our knowledge, no prior work has reported on a system where a state-of-the-art LLM is systematically used to rank startup pitches in an expert-like manner, specifically for investment decisions in a multistage ranking system. Our research bridges the gap between applied AI capabilities and entrepreneurship research, creating a novel system that transforms a large language model into a scalable virtual investment analyst capable of replicating much of the reasoning an expert panel would employ when ranking startup pitches.
+The headline result is that the component-based setup (s1) with Anthropic reaches NDCG@10 = 0.908 on a single run — strong alignment with the expert panel for the part of the ranking that actually drives investment decisions. Table 1 reports NDCG at three cutoffs for every (setup, model) combination for which canonical per-startup data is preserved. As noted above, the s3 (chain-of-thought) cells are absent due to a logging error during the experiment run; the script for re-running them is in [`code/paper3_llm_eval/run_experiments.py`](../code/paper3_llm_eval/run_experiments.py).
 
-# 3. Methodology
+**Table 1.** NDCG against the ten-expert aggregate, single run per cell.
 
-## 3.1 Research Design
+| Setup | Model | NDCG@10 | NDCG@20 | NDCG@35 |
+| --- | --- | --- | --- | --- |
+| s1 (component) | Anthropic | 0.908 | 0.901 | 0.971 |
+| s1 (component) | OpenAI | 0.881 | 0.897 | 0.967 |
+| s2 (guided) | Anthropic | 0.856 | 0.873 | 0.950 |
+| s2 (guided) | OpenAI | 0.696 | 0.782 | 0.895 |
+| s4 (minimal) | Anthropic | 0.842 | 0.884 | 0.958 |
+| s4 (minimal) | OpenAI | 0.786 | 0.831 | 0.939 |
 
-Our study employs a systematic approach to evaluate the effectiveness of Large Language Models (LLMs) in ranking startup pitches. The research design incorporates multiple experimental conditions and comparative metrics to assess LLM performance against human expert rankings.
+Two patterns are worth pulling out. First, the component-based decomposition reliably beats the single-pass setups on Anthropic, which is the prediction Paper 1 makes about evaluator architecture brought down to the prompt level: separate evaluation reduces single-cue dominance. Second, the minimal-guidance setup beats the guided-methodology setup at the larger cutoffs (NDCG@20 and NDCG@35), which suggests the model has a non-trivial native ability to differentiate weak from strong pitches that the structured methodology partially overrides. The methodology helps at the top of the ranking, where precision matters most; it is roughly neutral or slightly harmful in the middle, where the model's defaults are doing useful work.
 
-### 3.1.1 Sample Selection and Baseline Establishment
+Across providers, OpenAI underperforms Anthropic on every setup except component-based, and even there only by a small margin. The score-compression effect described above is the most likely cause: a model that gives most pitches a four cannot rank them.
 
-We selected 35 startups that had previously been ranked by human expert crowds on the Cyrannus platform. These startups were actively raising their first funding round at the time of evaluation, operating primarily at the technological frontier where little to no prior knowledge of their success was available. This timing is crucial as it prevents any potential data leakage that might occur through LLM retraining cycles or access to online resources. The original collection considered 40 candidates; 5 were excluded due to incomplete transcripts or moderation flags, leaving N = 35.
+### 4.3 Ensemble Averaging
 
-The human expert evaluations serve as our ground truth benchmark, providing a robust comparison point for assessing LLM-generated rankings. Each startup in our sample had received evaluations from at least 10 human experts forming what we term an "expert crowd." These experts made their evaluations independently without seeing others' reviews until all were submitted. Each expert brought domain-specific knowledge in both investment principles and the startup's industry vertical, applying their own criteria and methodology to generate scores and reviews. Over 50 experts participated in the overall review process, meaning each startup was likely evaluated by a unique combination of reviewers.
+LLM outputs are stochastic: the same prompt run twice produces slightly different scores. Averaging across runs reduces that stochasticity in the same way committee aggregation reduces individual evaluator noise — in fact, it is the same algebra ($\mathrm{Var}(\bar X) = \sigma^2 / n$ for independent draws) applied at the prompt level rather than the evaluator level.
 
-Experts were incentivized to provide high-quality reviews through an equity stake in startups ultimately selected for funding. This aligns with Sir Francis Galton's classic "wisdom of crowds" principle, which requires expertise, motivation, and independent judgment from participants to generate collective intelligence.
+Run-averaging within a single (setup, model) cell produces consistent improvement across the board. Table 2 reports the within-cell averages.
 
-### 3.1.2 Evaluation Metrics
+**Table 2.** NDCG averaged across two runs per (setup, model).
 
-To quantitatively assess the alignment between LLM evaluations and human expert judgments, we approached the problem explicitly as a ranking task rather than binary classification or regression. We employed the following metrics:
+| Setup | Model | NDCG@10 | NDCG@20 | NDCG@35 |
+| --- | --- | --- | --- | --- |
+| s1 (component) | Anthropic | 0.916 | 0.904 | 0.976 |
+| s1 (component) | OpenAI | 0.967 | 0.957 | 0.987 |
+| s2 (guided) | Anthropic | 0.849 | 0.853 | 0.936 |
+| s2 (guided) | OpenAI | 0.997 | 0.993 | 0.998 |
+| s4 (minimal) | Anthropic | 0.882 | 0.903 | 0.969 |
+| s4 (minimal) | OpenAI | 0.992 | 0.994 | 0.996 |
 
-* **Normalized Discounted Cumulative Gain (NDCG).** This ranking-based metric measures how closely the LLM rankings match human expert rankings, with particular emphasis on agreement at the top positions. NDCG is especially appropriate for our context as it penalizes ranking errors more heavily at the top of the list, aligning with real-world investment processes where identifying the most promising opportunities is critical. We report **exponential-gain NDCG**: gain<sub>i</sub> = 2<sup>expert_score<sub>i</sub></sup> − 1, with a log<sub>2</sub>(rank + 1) discount. Exact reproduction is provided by [`code/paper3_llm_eval/aggregate_ndcg.py`](code/paper3_llm_eval/aggregate_ndcg.py).
-* **Precision and Recall Analysis.** Considering the top 20 startups selected by human experts as "true positives," we calculated precision (proportion of LLM-selected startups that were also human-selected) and recall (proportion of human-selected startups also identified by the LLM). These metrics helped assess the practical utility of the system for filtering candidates.
-* **Stability Testing.** We conducted multiple independent runs for each LLM configuration to assess the consistency of rankings assigned to the same startup across different evaluation instances. This helped determine whether the outputs were reliable or subject to significant random variation.
+The largest improvements are on OpenAI, which is consistent with the score-compression diagnosis: averaging two compressed distributions adds back some of the differentiation that single runs lacked.
 
-## 3.2 LLM Implementation Methodology
+The strongest result comes from averaging across all setups rather than within a single setup. Table 3 reports three averaging strategies.
 
-Our implementation approach focuses on leveraging LLMs to evaluate one-minute pitch videos submitted by startups. The methodology consists of several key components.
-
-### 3.2.1 Data Acquisition and Processing
-
-Startup pitches were submitted as one-minute video presentations on the Cyrannus platform. We transcribed these videos to text using AWS transcription services, which provided high-quality conversion of spoken content to text, including technical terminology. Unlike approaches that summarize or extract selective information, we maintained the complete transcript to preserve all information presented in the pitch. No special preprocessing was applied beyond the standard AWS transcription process.
-
-### 3.2.2 Instruction Distillation from Human Feedback
-
-A distinctive aspect of our methodology is how we derived evaluation criteria and prompting strategies. Rather than directly interviewing experts to understand their thought processes, we employed a two-phase instruction distillation approach:
-
-1. **Analysis Generation.** We first instructed an LLM to analyze pitch transcripts alongside corresponding human expert reviews, identifying what worked well, what needed improvement, and generating actionable suggestions for improving each pitch.
-2. **Methodology Distillation.** After generating detailed analyses for dozens of pitches, we used an LLM to extract patterns and principles from these analyses, effectively reverse-engineering the evaluation logic from expert review outcomes. This distillation process resulted in a structured review methodology document that captures the implicit criteria used by human experts.
-
-This instruction distillation approach allowed us to systematically capture expert evaluation patterns without requiring explicit articulation of the thought processes by the experts themselves. This was especially important because each expert utilized their own rating system with potentially undefined criteria. One of our key contributions is distilling the criteria common across expert reviewers, creating an "average" methodology that could be adopted by LLMs for startup evaluation.
-
-### 3.2.3 Assessment Criteria Framework
-
-Based on the distilled methodology, we structured our evaluation around four primary criteria that emerged as central to expert assessments:
-
-1. **Market Potential.** Assessing the clarity and significance of the problem and market opportunity.
-2. **Solution Viability.** Evaluating the logical coherence and competitive advantage of the proposed solution.
-3. **Team Capability.** Examining the team's relevant expertise and market understanding.
-4. **Initial Traction.** Analyzing early validation signs and potential indicated by metrics.
-
-Each criterion is associated with specific evaluation questions derived from the distilled methodology.
-
-### 3.2.4 Experimental Setups
-
-To identify the optimal prompting strategy for LLM-based pitch evaluation, we tested four prompting approaches in increasing order of structure: minimal guidance (s4), chain-of-thought (s3), guided methodology (s2), and component-based evaluation (s1, the most structured). For consistency with the labeling in our results tables and code, we present them below in the s1 → s4 order.
-
-> **Note on Setup 3.** Setup 3 (chain-of-thought) was implemented and run, but its per-startup outputs were not retained in the canonical results table due to a logging error during the experiment run. Tables 2 and 3 below therefore report Setups 1, 2, and 4 only. Re-running Setup 3 from the published prompt is straightforward via [`code/paper3_llm_eval/run_experiments.py`](code/paper3_llm_eval/run_experiments.py); the prompt itself is preserved in [`code/paper3_llm_eval/prompts/setup3_cot.py`](code/paper3_llm_eval/prompts/setup3_cot.py).
-
-**Setup 1 (s1: Component-Based Evaluation).** The most structured approach evaluates each criterion through a separate LLM call, then aggregates the four scores. The methodology guideline is passed as system context.
-
-```
-<methodology>
-You are following a structured review methodology to evaluate a one-minute startup pitch.
-
-METHODOLOGY: [Distilled methodology text]
-
-You will analyze only one specific criteria: [Criteria Name].
-You will think step by step, analyze pros and cons, and assign a score from 1-5.
-</methodology>
-
-<Primary Assessment Criteria to review>
-[Criteria Name]
-SAMPLE QUESTIONS: [Specific evaluation questions]
-</Primary Assessment Criteria to review>
-```
-
-**Setup 2 (s2: Guided Methodology).** The full methodology is included in a single prompt; the LLM produces one overall score per pitch.
-
-```
-<methodology>
-You are following a structured review methodology to evaluate a one-minute startup pitch.
-You will analyze the complete pitch holistically and assign a single rating from 1-5.
-
-METHODOLOGY: [Distilled methodology text]
-</methodology>
-
-<Assessment Criteria>
-Please evaluate this pitch considering these key areas:
-- Market Potential: Is there a clear, significant problem? Is the market opportunity substantial?
-- Solution Viability: Does the solution make logical sense? Is there potential for competitive advantage?
-- Team Capability: Does the team demonstrate relevant expertise?
-- Initial Traction: Are there early signs of validation?
-</Assessment Criteria>
-```
-
-**Setup 3 (s3: Chain-of-Thought).** The LLM is instructed to reason step-by-step before scoring. (As noted above, results are not retained in the canonical table.)
-
-```
-<Chain of Thought>
-First, I'll provide a comprehensive review of the pitch, analyzing its strengths and weaknesses.
-Then, I'll identify the key pros and cons across all criteria.
-I will reason step by step and write a detailed analysis.
-I will include clear actionable suggestions to improve the pitch.
-</Chain of Thought>
-```
-
-**Setup 4 (s4: Minimal Guidance).** The LLM receives the pitch transcript and is asked for an overall rating with no methodology and no chain-of-thought. This is the no-scaffolding baseline.
-
-```
-<role>
-You are a venture scout working for an early stage venture fund and expert early stage
-(pre-seed, seed) startup pitch evaluator with extensive experience in venture capital
-and startup assessment.
-</role>
-
-<pitch transcript>
-[Pitch transcript text]
-</pitch transcript>
-
-Please provide your evaluation in the following JSON format:
-{
-  "review_string": "Your comprehensive review of the pitch",
-  "overall_rating_integer": X,
-  "confidence_integer": Y
-}
-```
-
-### 3.2.5 Multi-Model Evaluation
-
-To avoid reliance on a single LLM's capabilities or biases, we implemented our methodology using two state-of-the-art models:
-
-1. OpenAI's GPT-4 via their API.
-2. Anthropic's Claude via their API.
-
-This dual-model approach allowed us to compare performance across different LLM architectures and identify potential model-specific biases or strengths. We also explored a mixed prediction approach that combined outputs from both models to potentially improve overall assessment quality.
-
-### 3.2.6 Technical Implementation
-
-We developed a flexible evaluation system capable of interfacing with multiple LLM providers through their respective APIs. Our implementation includes:
-
-1. **Structured JSON Response Parsing.** Each LLM was instructed to return evaluations in a consistent JSON format to facilitate automated processing:
-
-   ```
-   {
-     "reasoning_string": "Detailed analysis with pros and cons",
-     "actionable_suggestions_string": "Suggestions to improve the score",
-     "score_integer": 4,
-     "confidence_integer": 8
-   }
-   ```
-
-2. **Fallback Mechanisms.** Robust parsing with fallback options handles unstructured outputs when the LLM does not strictly adhere to the requested format.
-
-3. **Score Aggregation.** For Setup 1 (component-based), the four per-criterion scores are combined via a weighted average reflecting the relative importance of each dimension as derived from the methodology distillation.
-
-The reference implementation is in [`code/paper3_llm_eval/pitch_evaluator.py`](code/paper3_llm_eval/pitch_evaluator.py).
-
-## 3.3 Empirical Validation Methodology
-
-To rigorously evaluate our LLM-powered pitch review system, we employed a comprehensive validation approach with multiple comparative analyses.
-
-### 3.3.1 Sample and Ground Truth Characteristics
-
-Our stratified sample of 35 startup pitches from the Cyrannus platform archive ensured diversity across industry sectors (including fintech, healthcare, enterprise software, and consumer technology) and development stages (pre-seed through Series A). The sample selection was designed to represent the variety of startups typically evaluated in early-stage investment contexts.
-
-Each pitch had been evaluated by at least ten human experts acting independently and using their own ranking criteria. These experts were incentivized to provide quality reviews through equity stakes in funded startups. We established the aggregated human expert scores as the "ground truth" for our evaluation, representing the collective wisdom of the expert crowd.
-
-### 3.3.2 Comprehensive Evaluation Framework
-
-We assessed alignment between LLM-generated rankings and human expert judgments using multiple complementary metrics:
-
-1. **Ranking Accuracy.** NDCG was calculated at k = 10, 20, and 35 to assess alignment at different selection thresholds, reflecting the practical reality that investors typically focus on the top-ranked opportunities.
-2. **Selection Quality.** Precision and recall metrics helped quantify how effectively the LLM identified the same top candidates as human experts.
-
-### 3.3.3 Technical Framework
-
-Our technical implementation supported rigorous comparison across experimental conditions:
-
-1. **Structured Prompt Templates.** Parameterized templates for each experimental setup could be populated with pitch-specific content.
-2. **Response Processing.** A JSON-based formatting system with fallback mechanisms handled unstructured outputs or partial responses.
-3. **End-to-End Pipeline.** An integrated workflow managed the process from pitch ingestion through score calculation and comparison with human benchmarks.
-
-This architecture enabled systematic comparison across experimental conditions while maintaining procedural consistency, ensuring that observed differences reflected the impact of methodological variations rather than implementation artifacts.
-
-# 4. System Architecture
-
-## 4.1 Architectural Overview
-
-We implemented our methodology as a functional prototype integrated within the Cyrannus platform. The system follows a modular design that works seamlessly with the platform's existing workflow where founders submit pitch videos and experts provide evaluations. The architecture comprises four primary modules: (a) Data Ingestion, (b) LLM Service, (c) Evaluation Orchestration, and (d) Integration Services.
-
-**[Figure 2 — to be added: system-architecture diagram showing the four primary modules and their data flow.]**
-
-## 4.2 Core Components
-
-### 4.2.1 Data Ingestion Module
-
-The Data Ingestion module processes one-minute video submissions from startup founders using standard AWS transcription services without special customization. The system stores both raw transcribed text and metadata (timestamps, confidence scores) in a secure database. No additional preprocessing is applied beyond what AWS provides natively. The pipeline operates asynchronously, allowing founders to receive submission confirmation while transcription completes in the background, typically within minutes.
-
-### 4.2.2 LLM Service Module
-
-The LLM Service module provides a unified interface to multiple language model providers (OpenAI and Anthropic). Key features include:
-
-* **Multi-Provider Abstraction.** Provider-specific adapters handle authentication, request formatting, and response parsing while presenting a consistent interface to other system components.
-* **Controlled Response Generation.** Temperature settings are kept low (≈ 0.2) to prioritize deterministic, consistent responses.
-* **Performance Optimization.** Response caching and comprehensive logging support quality monitoring and auditability.
-
-Performance testing showed average response latencies of 2–8 seconds for standard prompts, significantly faster than scheduling human expert reviews.
-
-### 4.2.3 Evaluation Orchestration Logic
-
-The orchestration component manages the evaluation workflow by:
-
-* **Constructing Prompts.** Using parameterized templates to insert pitch transcripts and appropriate instructions for each experimental setup.
-* **Managing Evaluation Flow.** For component-based evaluation, sequentially assessing individual criteria before aggregating results.
-* **Handling Errors.** Implementing fallbacks for incomplete or malformed responses.
-* **Processing Results.** Computing aggregate scores through weighted combinations of criterion-specific evaluations.
-
-Our prompt engineering places complete pitch transcripts before evaluation questions, as testing showed this produced more comprehensive analyses than alternative structures.
-
-### 4.2.4 Integration Services
-
-The integration services connect the LLM-based evaluation system with the Cyrannus platform through:
-
-* **Expert Review Interface.** Augmenting the human expert portal with LLM-generated analysis.
-* **Investor Dashboard.** Displaying AI evaluation scores alongside human ratings, highlighting significant divergences.
-* **Feedback Mechanisms.** Capturing expert feedback to enable continuous system improvement.
-
-The architecture uses REST APIs and event-driven communication to maintain loose coupling between components.
-
-## 4.3 Technical Implementation Details
-
-### 4.3.1 Prompt Construction
-
-The system employs a structured format incorporating role specification, methodology guidelines, assessment criteria, and reasoning frameworks. A typical criterion-specific prompt follows this pattern:
-
-```
-<role>
-You are a venture scout working for an early stage venture fund and expert early stage
-(pre-seed, seed) startup pitch evaluator with extensive experience in venture capital
-and startup assessment.
-</role>
-
-<methodology>
-You are following a structured review methodology to evaluate a one-minute startup pitch.
-You will analyze only one specific criteria: [CRITERIA_NAME].
-You will think step by step, analyze pros and cons, and assign a score from 1-5.
-</methodology>
-
-<pitch transcript>
-[COMPLETE_PITCH_TRANSCRIPT]
-</pitch transcript>
-
-<Primary Assessment Criteria to review>
-[CRITERIA_NAME]
-SAMPLE QUESTIONS: [CRITERIA_QUESTIONS]
-</Primary Assessment Criteria to review>
-
-<Chain of Thought>
-[REASONING_GUIDANCE]
-</Chain of Thought>
-```
-
-This structure ensures consistent evaluation while enabling focus on specific assessment dimensions.
-
-### 4.3.2 Response Processing and Fallback Mechanisms
-
-To handle variability in LLM outputs, we implemented a robust JSON parsing system. The primary pathway extracts structured responses in our specified format:
-
-```
-{
-  "reasoning_string": "Detailed analysis with pros and cons",
-  "actionable_suggestions_string": "Suggestions to improve the score",
-  "score_integer": 4,
-  "confidence_integer": 8
-}
-```
-
-When responses don't follow this format, our fallback parser uses regular expressions and heuristic analysis to extract key components. For incomplete extractions, the system applies sensible defaults (e.g., a neutral score with low confidence) while flagging the response for review.
-
-### 4.3.3 Security Considerations
-
-Given the sensitive nature of startup pitch data, we implemented comprehensive security measures:
-
-* **Data Protection.** All content and evaluations are encrypted in transit and at rest.
-* **Access Management.** Fine-grained permissions restrict evaluation access based on user roles.
-* **Information Minimization.** Prompts include only necessary information, and responses are processed to remove sensitive details.
-* **Audit Capabilities.** Comprehensive logging tracks system actions for accountability.
-
-These measures ensure compliance with data protection regulations while maintaining confidentiality for startup founders.
-
-## 4.4 Extensibility Features
-
-The architecture was designed for extensibility, supporting:
-
-* **Model Flexibility.** The abstracted service layer enables straightforward integration of new language models.
-* **Framework Evolution.** The assessment criteria can be expanded or refined without architectural changes.
-* **Workflow Adaptation.** The orchestration logic accommodates different evaluation sequences based on evolving requirements.
-* **Continuous Improvement.** Built-in feedback mechanisms support ongoing refinement of prompts and evaluation accuracy.
-
-This forward-looking design ensures the system can evolve alongside advances in both LLM technology and venture evaluation methodologies.
-
-# 5. Experimental Results
-
-## 5.1 Comparative Performance of LLM Models and Methodologies
-
-Our experiments reveal important insights into how different prompt engineering strategies and model selections affect startup pitch ranking quality. We analyze these findings through multiple performance metrics, focusing on the ability of LLMs to replicate human expert rankings.
-
-### 5.1.1 Impact of Methodology on Score Distribution
-
-A critical finding was the pronounced effect of methodology guidance on score distribution patterns. When operating without explicit methodology, both OpenAI and Anthropic models demonstrated a strong tendency toward score compression, with OpenAI assigning a score of 4 to approximately 80% of pitches. This compression severely limited the models' ability to differentiate between average and high-quality pitches, though both models reliably identified the weakest pitches regardless of methodology.
-
-In contrast, when employing our distilled methodology with the component-based approach (Setup 1), both models produced score distributions that more closely resembled human expert distributions. The Anthropic model achieved reasonable score differentiation even with Setup 2, where methodology was provided but scoring occurred in a single API call. This suggests that providing explicit evaluation criteria has a significant normalizing effect on LLM evaluations, particularly in reducing the tendency toward overly positive assessments.
-
-A notable distinction emerged between the two model providers: the OpenAI model consistently assigned higher scores across all experimental setups, suggesting a potential positivity bias. This observation highlights the importance of score normalization when implementing multi-model approaches or when comparing rankings across different LLM architectures.
-
-### 5.1.2 Ranking Accuracy: NDCG Analysis
-
-The Normalized Discounted Cumulative Gain (NDCG) metric provided a rigorous assessment of how closely LLM rankings aligned with human expert rankings. Table 2 presents the NDCG scores at different cutoff thresholds (top 10, 20, and 35 pitches) across the experimental setups for which canonical per-startup data is preserved (Setups 1, 2, and 4 — see the note in §3.2.4).
-
-**Table 2: NDCG Scores Across Experimental Setups (single run per cell).**
-
-| Setup | NDCG@10 | NDCG@20 | NDCG@35 |
-| --- | --- | --- | --- |
-| s1_anthropic_1 | 0.908 | 0.901 | 0.971 |
-| s2_anthropic_1 | 0.856 | 0.873 | 0.950 |
-| s4_anthropic_1 | 0.842 | 0.884 | 0.958 |
-| s1_openai_2 | 0.881 | 0.897 | 0.967 |
-| s2_openai_2 | 0.696 | 0.782 | 0.895 |
-| s4_openai_2 | 0.786 | 0.831 | 0.939 |
-
-The Anthropic model using the component-based methodology (Setup 1) achieved the highest NDCG scores, particularly at the critical top-10 threshold (NDCG@10 = 0.908), indicating strong alignment with expert rankings for the most promising startups. Setup 4, which provided no methodology but leveraged the model's native capabilities, outperformed Setup 2 on NDCG@20 and NDCG@35. This suggests that the model possesses some inherent ability to differentiate between weak and strong pitches even without explicit guidance.
-
-In contrast, the OpenAI model's ranking performance was consistently lower across all setups except Setup 1, which still achieved respectable alignment with human rankings. The model's tendency to assign uniformly high scores significantly impaired its ability to meaningfully rank pitches of varying quality, particularly in Setups 2 and 4.
-
-### 5.1.3 Ensemble Performance and Model Stacking
-
-Recognizing that language model outputs represent stochastic processes, we explored whether averaging multiple outputs could improve ranking reliability. For each setup, we conducted multiple evaluation runs and averaged the resulting scores. Table 3 presents the NDCG scores for these run-averaged evaluations.
-
-**Table 3: NDCG Scores for Run-Averaged Evaluations.**
-
-| Setup | NDCG@10 | NDCG@20 | NDCG@35 |
-| --- | --- | --- | --- |
-| s1_avg | 0.916 | 0.904 | 0.976 |
-| s2_avg | 0.849 | 0.853 | 0.936 |
-| s4_avg | 0.882 | 0.903 | 0.969 |
-
-The averaged scores consistently outperformed individual model runs, with the most significant improvements observed for the OpenAI model. This finding aligns with ensemble methods in classical machine learning, where combining multiple weak learners often produces stronger aggregate performance.
-
-Most notably, when we averaged scores across all available methodologies, we achieved the highest overall NDCG scores (NDCG@10 = 0.924, NDCG@20 = 0.923, NDCG@35 = 0.977). This suggests that different prompt strategies capture complementary aspects of pitch quality, and a comprehensive ranking benefits from integrating these diverse perspectives.
-
-**Table 4: NDCG Scores for Different Averaging Strategies.**
+**Table 3.** NDCG by averaging strategy. The "all setups" row corresponds to averaging every per-startup score in the preserved data.
 
 | Strategy | NDCG@10 | NDCG@20 | NDCG@35 |
 | --- | --- | --- | --- |
-| avg (all setups) | 0.924 | 0.923 | 0.977 |
-| avg_meth (methodology setups) | 0.908 | 0.905 | 0.977 |
-| avg_no_meth (no-methodology setups) | 0.905 | 0.918 | 0.974 |
+| Average across all setups | 0.924 | 0.923 | 0.977 |
+| Methodology-guided setups only | 0.908 | 0.905 | 0.977 |
+| No-methodology setups only | 0.905 | 0.918 | 0.974 |
 
-The strong performance of the average without methodology (avg_no_meth) indicates that even without explicit guidance, LLMs capture meaningful signals about pitch quality. This suggests that our methodology, while effective, may not fully encapsulate all the nuanced elements that influence human expert judgments. Some finer-grained signals appear to be captured through unstructured requests, complementing the structured analysis provided by methodology-guided evaluation.
+NDCG@20 = 0.923 against a ten-expert aggregate is the headline number. It is also striking that the no-methodology average performs comparably to the methodology-guided average at the larger cutoffs, which reinforces the §4.2 observation that the model's defaults are doing useful work. The methodology adds value at the very top of the ranking, where the precision of NDCG@10 matters most; it does not appear necessary for getting the broad shape of the ranking right.
 
-The numbers in Tables 2–4 are reproduced exactly by [`code/paper3_llm_eval/aggregate_ndcg.py`](code/paper3_llm_eval/aggregate_ndcg.py) reading [`code/data/ai_reviews_research_anon.csv`](code/data/ai_reviews_research_anon.csv).
+### 4.4 Selection Quality at the Top Cutoffs
 
-## 5.2 Selection Quality Analysis
+Beyond the aggregate metric, the question that matters for a deployed system is: given the top-20 pitches the LLM ranks, how many are also in the expert top-20? Across the strongest configurations, the overlap is consistently high. Most pitches that the experts placed in the bottom half of the ranking are also placed in the bottom half by the LLM — the system reliably identifies obviously unsuitable candidates, which is the part of the work that absorbs the most expert time at the screening stage. The disagreements concentrate at the top, where ranking is subtle, and that is where human judgment was always going to dominate.
 
-Beyond ranking metrics, we analyzed how effectively the LLM evaluations could identify the top-performing startups as ranked by human experts.
+### 4.5 Error Analysis
 
-**[Figure 3 — to be added: scatter plot of LLM rank vs. expert rank for the highest-performing setups, with a y = x reference line and quadrant shading for top-10 / top-20 / bottom thresholds.]**
+The disagreements between the LLM and the expert panel are themselves informative. Across the cases where the LLM rated a pitch substantially lower than the expert panel did, four patterns recurred consistently.
 
-The visualization reveals that only a small number of pitches from the lower 50% (as ranked by experts) were positioned in the top half by LLM evaluations. This indicates strong discriminative power in separating promising from unpromising opportunities. Most significantly, all tested configurations demonstrated near-perfect identification of the bottom-performing pitches, suggesting reliable detection of clearly unsuitable candidates.
+The most common was insufficient team information. Pitches that asserted relevant expertise without naming specific roles, prior employers, or directly applicable experience scored low on team capability. The expert panel, drawing on domain knowledge, was sometimes able to fill in the gap — recognizing the founder's prior company by name, knowing the role implied a particular skill set — and the LLM, lacking that domain background, could not. This is a real limitation: the LLM evaluates what the pitch contains, not what the expert can infer.
 
-At a more granular level, the visualization shows that while all setups accurately identified the lowest-ranked pitches, there were variations in their ability to correctly order the top 50%. Setup 1 with the Anthropic model and the averaged methodologies demonstrated the most reliable sorting, while Setup 1 with the OpenAI model showed more inconsistencies, aligning with the NDCG analysis.
+The second was limited traction evidence. Pitches that mentioned "discussions" or "interest" without quantified metrics (users, revenue, partnerships, growth rates) consistently scored lower from the LLM than from the panel. The LLM treats unsupported assertions skeptically; experienced investors are sometimes willing to trust an experienced founder's read of the market even without numbers.
 
-The analysis also revealed a small subset of pitches that received high expert rankings but low LLM rankings. These cases warranted further error analysis to understand potential systematic gaps in the LLM evaluation process.
+The third was vague solution detail. Pitches that described what their technology *did* without describing how it differed from existing solutions or how it integrated with existing systems received lower solution-viability scores from the LLM. Experts could often guess at the differentiation from context; the LLM could not.
 
-## 5.3 Error Analysis
+The fourth was market-analysis gaps. Pitches that asserted a large market without naming a specific TAM figure, a competitive landscape, a go-to-market plan, or evidence of customer willingness to pay were marked down on market potential. Again, experts sometimes filled in the missing pieces from prior knowledge of the sector.
 
-To understand why certain pitches received divergent rankings between LLMs and human experts, we conducted a detailed error analysis. Four primary factors emerged as consistent reasons for LLM downgrading of pitches that experts ranked highly.
+These four patterns have a common shape: the LLM is a strict reader of what the pitch contains; the expert is a generous reader who can supplement from domain knowledge. From a screening-system perspective, the strict reading is mostly the right behavior. A startup whose pitch does not name its TAM, its team's relevant experience, its traction metrics, or its competitive positioning is asking the screener to do work the founder should have done. The model demanding evidence rather than accepting assertion is a feature, not a bug — it pushes the work back to the founder, where it belongs.
 
-### 5.3.1 Insufficient Team Information
+The practical implication is that the same content that improves an LLM's ranking also improves the pitch's reception by careful human reviewers. The error analysis is not just about the model; it is also about what makes a pitch well-formed in the first place.
 
-The LLM evaluations consistently scored startups lower on Team Capability when:
+---
 
-* Founders failed to explicitly outline team members' specific backgrounds and relevant experience.
-* Only generic assertions about expertise were provided without supporting details.
-* The pitch lacked a clear articulation of why this particular team was uniquely qualified to address the problem.
-* Previous relevant experience was not explicitly connected to the current venture's requirements.
+## 5. Discussion
 
-### 5.3.2 Limited Traction Evidence
+### 5.1 What the Result Means for the Screening Bottleneck
 
-LLMs appeared to require more concrete evidence of traction than human experts:
+The expert-time bottleneck at the screening stage of venture capital has a specific shape: most of the time spent reading a pitch is spent extracting basic content from presentation, and only a small fraction is spent evaluating whether the underlying business will work. The LLM filter inverts that ratio. If the model can be trusted to handle the content extraction at NDCG@20 = 0.923 alignment with a ten-expert aggregate, the experts are freed to spend their limited time on the part of the evaluation where their judgment cannot be replicated: assessing whether the team can actually execute, whether the market timing is right, whether the technical risk is manageable, whether the founder is the kind of person who will figure it out. Those are the questions the LLM cannot answer. They are also the questions that actually predict outcomes.
 
-* Pitches mentioning "discussions" or "interest" without specific metrics were scored lower.
-* Absence of quantifiable traction indicators (user numbers, revenue figures, growth rates) resulted in a skeptical assessment.
-* Lack of named partnerships or customers reduced perceived credibility.
-* Insufficient validation that the solution functions as described in real-world conditions.
+The architectural framing matters. The LLM is not deciding which startups to fund. It is filtering for whether a pitch contains the substantive content an expert would otherwise have to extract, and reordering the queue so that the top of the human reviewer's list is more likely to be pitches the human would have prioritized anyway. The expert remains the decision-maker. The model is a stage-zero filter that operates on observable surface content and frees the next stage to focus on substance.
 
-### 5.3.3 Vague Solution Details
+This is the operational instantiation of Paper 2's "AI filter" stage. Paper 2 modeled that stage as an idealized low-noise, low-bias filter and showed that platforms with such a filter outperformed elite VCs by 11.5% on portfolio quality. This paper measures what the real version of that filter actually achieves; the σ_AI calibration in Paper 2's §5.7 sensitivity analysis is the bridge.
 
-Technical details were often deemed insufficient for high scores:
+### 5.2 The Generalizability of Instruction Distillation
 
-* Limited explanation of how the technology actually functions.
-* Inadequate differentiation from competing solutions.
-* Missing information about implementation challenges or limitations.
-* Insufficient clarity regarding integration with existing systems or workflows.
+The instruction-distillation methodology is the part of this paper most likely to transfer outside venture capital. Anywhere a domain expert produces a judgment they cannot fully articulate — grant review, academic admissions, manuscript triage at a journal, candidate screening at scale — the same pattern applies. Pairs of (input, expert verdict) exist; what does not exist is a written-down rubric that captures the implicit consensus across the panel of experts. Distillation produces that rubric directly from the data, without forcing experts into an interview loop they are constitutionally bad at.
 
-### 5.3.4 Market Analysis Gaps
+Two conditions limit the transfer. First, the panel needs enough independent reviewers per item that the aggregate is more than one reviewer's idiosyncrasy — without that, the LLM is distilling individual taste rather than collective methodology. Second, the inputs need to be machine-readable enough that the LLM can pull useful features from them. Pitch transcripts are; medical scans are not, at least not by the same models. Distillation is method, not magic.
 
-Despite claims of large market opportunities, LLMs penalized pitches that lacked:
+### 5.3 Limitations
 
-* Specific Total Addressable Market figures with sources.
-* Clear competitive landscape analysis.
-* Detailed go-to-market strategy.
-* Evidence of customer willingness to pay.
+The transcript reduction loses information that the video does not. A founder who pauses meaningfully, who shows a working demo, who handles a hostile question with grace in the live setting communicates things the transcript flattens. The system as described filters on transcripts because that is what scales; a system that filters on audio or video would be a richer system, and the transferable lessons may not hold. Earlier work in this direction is sparse and rapidly evolving.
 
-This error analysis reveals a critical insight: LLMs tend to evaluate pitches based strictly on the explicit information provided, whereas human experts may make inferential leaps or supplement missing information based on domain knowledge. The LLM functions similarly to a skeptical investor, demanding evidence rather than accepting claims at face value. The majority of these discrepancies could be addressed with minimal additional pitch content by being more specific and concrete.
+The N = 35 sample is the most-stated limitation and the one most worth taking seriously. It is large enough to demonstrate the alignment is real and to support specific claims about which prompting strategies work, but it is not large enough to support claims about how the methodology generalizes across sectors or across time. The natural follow-up paper is a larger replication on the Cyrannus production data, which is anonymized in [`code/data/ai_reviews_prod_anon.csv`](../code/data/ai_reviews_prod_anon.csv) (109 startups; less expert-labelled but useful as an out-of-sample check).
 
-## 5.4 Summary of Findings
+The model providers will change. The specific configurations reported in Table 1 reflect the Claude and GPT-4 versions available at the time of the experiments; either provider's next release may shift the numbers up or down. The prompting strategies should remain comparable in their relative ordering, since the structural properties (decomposition, chain-of-thought, methodology presence) are not provider-specific. But the absolute numbers will move.
 
-Our experimental results demonstrate that LLM-based startup pitch ranking can achieve high correlation with human expert judgments when properly implemented. The component-based methodology with the Anthropic model (Setup 1) achieved the strongest performance on individual runs, while averaging evaluations across multiple setups yielded the highest overall ranking accuracy.
+The model does not see, and cannot reason about, the things experts learn from years of dealing with founders directly. It does not know that this team's prior employer has a reputation for producing specific kinds of competence. It does not know that a particular vertical has been recently re-examined by tier-1 funds and the consensus has shifted. That knowledge is what the human reviewer brings, and the system is designed around the assumption that they bring it. Removing the human is not the goal.
 
-The findings suggest that effective LLM evaluation benefits from:
+### 5.4 The Gaming Risk
 
-1. Explicit methodology guidance that operationalizes evaluation criteria.
-2. Component-based assessment that addresses each criterion individually.
-3. Ensemble approaches that combine multiple evaluations to reduce random variation.
-4. Multi-model implementation that leverages the strengths of different LLM architectures.
+Any deployed evaluation system faces the question of whether the entities being evaluated will adapt to the evaluator. If founders learn the LLM weights specific TAM citations, named team credentials, and quantified traction, they will start including those things — which is what the system is designed to encourage. The risk is that founders learn to *fake* those things, and the LLM, lacking the means to verify the underlying claims, accepts the fakery as substance.
 
-These results validate the potential of LLM-powered pitch review systems to serve as effective screening mechanisms for early-stage investment decisions, particularly in identifying clearly unsuitable candidates and providing consistent, criteria-based evaluations of pitch quality.
+The mitigation is architectural rather than technical. The LLM is the first stage; the human expert is the second stage. A founder who fakes a TAM number gets through the LLM filter and lands in front of a human reviewer who knows the sector and will catch the fake. A founder who fakes named team credentials encounters the same human reviewer. The two-stage architecture does not require the LLM to be unfoolable; it requires the LLM to be unfoolable *in ways the human is also unfoolable*. The combined system is stronger than either alone, which is the architectural property Paper 1 calls multi-stage complementarity.
 
-# 6. Discussion
+The longer-term mitigation is that the criteria evolve. If a particular pattern of LLM-friendly fakery emerges in the data, the methodology distillation can be re-run with explicit attention to that pattern, and the prompts updated. This is the same arms-race dynamic that any signal-detection system faces and is well-understood in adjacent domains (search ranking, content moderation, fraud detection). The architecture supports it.
 
-## 6.1 Implications for Venture Capital Decision-Making
+---
 
-Our systematic evaluation of LLM-powered startup pitch ranking yields significant implications for both research and practice. The experimental results demonstrate that properly configured large language models can serve as effective pre-filters in the specialized domain of venture capital screening, achieving high correlation with human expert rankings.
+## 6. Conclusion
 
-The strong alignment between LLM-generated rankings and expert crowd rankings suggests that language models can distill and internalize complex investment criteria from unstructured expert reviews and apply them consistently. This finding extends prior research on LLM evaluation capabilities into the novel domain of pitch analysis, confirming that these models can not only comprehend business descriptions but also render reasoned judgments about pitch quality. Our work contributes to the broader literature on human-computer interaction by demonstrating that for ill-structured, high-stakes tasks like startup evaluation, AI systems can provide valuable decision support rather than being limited to simple analytical functions.
+The expert-time bottleneck at the screening stage of early-stage venture capital is not a problem of expert availability. It is a problem of expert *allocation*. The current architecture spends most of the available expert attention on extracting basic content from variable-quality presentation, and very little on evaluating the substantive question of whether the business will work. An LLM, prompted with a methodology distilled from the expert panel itself, can do most of the content-extraction work at NDCG@20 = 0.923 alignment with a ten-expert aggregate, leaving the experts to spend their time on the part of the evaluation where their judgment is irreplaceable.
 
-Perhaps the most significant contribution of our approach is addressing the fundamental "pitch quality versus startup quality" disparity. By design, our LLM-based system focuses on content substance rather than presentation style, serving as a first-pass filter that allows human experts to focus primarily on startup quality rather than pitch delivery aspects. This design provides an important counterbalance to human evaluators' potential susceptibility to charismatic but substantively weak pitches. For example, in one test case, a startup with a polished presentation and an enthusiastic presenter received relatively high scores from some human judges. However, the LLM flagged that the market size was never quantified and the business model lacked clarity on revenue streams, resulting in a moderate AI score.
+The methodological contribution — instruction distillation — is the move that makes this work. It avoids the failure mode of asking experts to articulate a rubric they cannot articulate, and instead extracts the rubric from the data the panel has already produced. This generalizes beyond pitch ranking; anywhere a panel produces aggregate judgments without a unified written rubric, the same approach should apply.
 
-Conversely, the system also identified "under-pitched" startups — cases where founders presented less engagingly but included substantive content indicating strong fundamentals, such as patented technologies or significant early traction mentioned briefly. In traditional settings, such startups might be overlooked due to presentation deficiencies. Our system, however, assigned them appropriately high scores based on substantive factors, suggesting they warranted investor attention.
+The architectural contribution is that the LLM is positioned as a first-stage filter, not as a replacement for human judgment. The combined two-stage architecture is the operational instantiation of the platform-architecture concept in Paper 2, and the empirical NDCG numbers in this paper are what feed back into Paper 2's sensitivity analysis as the realistic σ_AI anchor.
 
-This capability for a more objective appraisal of core business signals represents a key advantage of incorporating AI into venture evaluation. It has significant implications for reducing various forms of bias, including those related to gender, ethnicity, and presentation style, that can affect human evaluators. The approach aligns with broader efforts to create more meritocratic startup evaluation ecosystems by emphasizing substance over style.
+The smaller, harder honesty is this: a paper about replacing biased human judgment was itself produced through a process — peer review, editorial selection, citation politics — that the LENS framework predicts is subject to exactly the dynamics it describes. The framework does not exempt its authors. The platform that deploys these results is staffed by people who, like everyone else, evaluate pitches under the same cognitive constraints the paper documents. We are not standing outside the system we are describing. The methodology described above is one mitigation, not a solution; the solution, if there is one, is iterative and architectural and nobody owns it.
 
-## 6.2 Human-AI Collaboration in Expert Domains
+---
 
-Our findings demonstrate the value of human-AI collaboration in domains requiring specialized knowledge and judgment. The integration of AI-generated reviews into the Cyrannus platform received generally positive feedback from expert users, who reported that the AI's comments often mirrored their own thinking, effectively serving as a "second pair of eyes." Some experts even noted that the AI identified considerations they hadn't thought of, functioning similarly to a knowledgeable colleague.
+## Reproducibility
 
-Instances of disagreement between AI and expert rankings proved particularly valuable, creating opportunities for improvement through either refining the AI methodology or updating expert criteria when the AI identified legitimate issues overlooked by human reviewers. This bidirectional learning process highlights an important principle: the goal is not to replace human experts but to make their process more efficient and potentially less biased.
+Every NDCG number in this paper is reproduced exactly by [`code/paper3_llm_eval/aggregate_ndcg.py`](../code/paper3_llm_eval/aggregate_ndcg.py) reading [`code/data/ai_reviews_research_anon.csv`](../code/data/ai_reviews_research_anon.csv). The four prompt files are at [`code/paper3_llm_eval/prompts/`](../code/paper3_llm_eval/prompts/) and the orchestrator that re-runs the experiments end-to-end (given API keys for both providers) is [`code/paper3_llm_eval/run_experiments.py`](../code/paper3_llm_eval/run_experiments.py). The reference implementation of the per-criterion evaluation pipeline is [`code/paper3_llm_eval/pitch_evaluator.py`](../code/paper3_llm_eval/pitch_evaluator.py). The full experimental setup is reproducible with the data as released; the underlying confidential transcripts and startup identities are not.
 
-In practical terms, an investor using our system could triage a large number of pitches quickly, with the AI filtering out clearly unsuitable candidates (those ranking very low due to fundamental deficiencies) and highlighting particularly promising opportunities. This addresses the pervasive scale problem in venture capital — too many pitches, too little expert time — by front-loading AI analysis. The transparency of the AI's reasoning provides additional value, allowing investors to quickly understand why a pitch received a particular ranking and make informed decisions about allocating their limited time and attention.
-
-## 6.3 Methodological Contributions
-
-Our research makes several methodological contributions to the emerging field of AI-assisted evaluation. The instruction distillation approach — where we used LLMs to analyze expert reviews and distill evaluation patterns — represents a novel technique for capturing implicit expert knowledge without requiring explicit articulation of thought processes. This approach could be valuable in other domains where expert judgment is difficult to formalize.
-
-The comparative analysis of different prompt engineering strategies provides practical insights for similar applications. Our finding that component-based evaluation (Setup 1) outperformed other approaches suggests that decomposing complex evaluations into specific dimensions may improve LLM performance in ranking tasks. Similarly, the demonstrated value of ensemble methods — averaging multiple LLM evaluations — offers a straightforward technique for improving reliability that has received limited attention in academic literature despite adoption in industry practice.
-
-The effectiveness of combining evaluations from different models (OpenAI and Anthropic) with and without methodology guidance highlights the complementary nature of different approaches. This suggests that hybrid strategies leveraging both structured and unstructured evaluations may capture more dimensions of quality than either approach alone.
-
-## 6.4 Generalizability and Limitations
-
-While we tailored our methodology to early-stage startup evaluation, many principles should transfer to other contexts involving the assessment of complex narratives against domain-specific criteria. Potential applications include evaluating research grant proposals, assessing job candidate qualifications, analyzing business plans, or reviewing academic submissions. The key transferable elements include defining clear rubrics that operationalize domain expertise, ensuring focus on substantive content rather than presentation quality, decomposing complex judgments into specific dimensions, employing multiple models or evaluation instances, and maintaining a human-AI feedback loop for continuous improvement.
-
-Several limitations must be acknowledged. **Sample size:** N = 35 is sufficient as a proof-of-concept that the methodology produces a real signal but is insufficient for strong external validity; a larger-N replication is the natural follow-up and is out of scope for this paper. **Multimodal scope:** our system relies on the quality of pitch transcripts, which may not fully capture non-verbal cues or visual elements that could influence expert judgment. **Inferential limitations:** despite a strong correlation with expert rankings, LLMs may miss nuanced aspects of startup potential that are difficult to capture through text analysis alone, particularly when experienced investors infer information from subtle signals. **Model opacity:** despite chain-of-thought reasoning and structured outputs, the internal reasoning processes of LLMs are not fully transparent.
-
-## 6.5 Ethical Considerations
-
-The application of AI to investment decisions raises important ethical considerations. There exists a risk that founders might learn to "game" the AI evaluation if its criteria became widely known, structuring pitches to satisfy the AI's requirements without necessarily possessing the claimed strengths. This concern parallels search engine optimization tactics, but in an investment context.
-
-To mitigate this risk, several approaches are prudent: periodically updating evaluation criteria, employing multiple models with different strengths, using adversarial testing to identify potential exploits, and — most importantly — maintaining human expert review as the final decision point. Since our system is designed to assist rather than replace human judgment, attempts to manipulate the AI would likely be detected in subsequent human review stages.
-
-Transparency with founders is another ethical imperative. By sharing a version of the AI feedback with entrepreneurs, Cyrannus not only provides valuable guidance for improvement but also demystifies aspects of the venture evaluation process. This educational component aligns with broader goals of creating more accessible funding ecosystems.
-
-Finally, as with any AI system affecting resource allocation decisions, ongoing monitoring for potential biases and unintended consequences is essential. While our approach may reduce certain human biases, vigilance is required to ensure the system doesn't introduce or amplify other forms of bias.
-
-# 7. Future Work
-
-Building on the insights gained from our research, we identify several promising directions for future work in AI-assisted startup ranking.
-
-## 7.1 Enhanced Ranking Methodologies
-
-With a larger sample size, several refinements to our ranking approach become possible:
-
-* **Weighted Criteria Development.** Rather than using simple averages of criteria scores, we could employ linear regression to derive optimal weights for each criterion, potentially improving ranking accuracy.
-* **Hierarchical Criteria Framework.** Heavily weighted criteria could be further decomposed into sub-criteria for more nuanced evaluation. For example, "team capability" might be broken down into domain expertise, prior startup experience, and complementary skill sets.
-* **Validation Testing.** A larger dataset would enable proper training/validation splits to assess the generalizability of our ranking model, which is currently limited by the proof-of-concept N = 35.
-* **Cross-Domain Applications.** The methodology distillation approach we developed could be applied to other ranking problems beyond startup evaluation: product category reviews, company rankings based on employee feedback, candidate assessment systems — all areas where LLMs could help reduce subjective bias and improve consistency at scale.
-
-## 7.2 Multimodal Filtering Capabilities
-
-Our current pitch quality filter primarily relies on transcribed text. Future iterations could incorporate multimodal analysis capabilities while maintaining the system's focus on filtering for pitch quality rather than evaluating startup quality:
-
-* **Information Completeness Assessment.** Visual analysis of slides could help identify whether key information components (market size data, competitive analysis, etc.) are present but were omitted in the verbal presentation.
-* **Data Representation Evaluation.** Assessment of charts, graphs, and visual evidence could help determine whether quantitative claims are adequately supported.
-* **Technical Demonstration Analysis.** For product-focused startups, evaluation of demo segments could verify whether critical functionality explanations are present and comprehensive.
-
-This multimodal approach would strengthen the system's ability to filter based on information completeness and clarity, not presentation style or charisma.
-
-## 7.3 Enhanced LLM Implementations
-
-As LLM capabilities continue to evolve, several technical enhancements warrant exploration:
-
-* **Domain-Specific Fine-Tuning.** Training specialized models for different industry sectors (healthcare, fintech, enterprise software) could improve evaluation accuracy for sector-specific claims and opportunities.
-* **Hybrid Human-AI Workflows.** More sophisticated collaboration models could optimize the complementary strengths of human and AI evaluators. The LLM could focus on consistent pitch quality filtering and information extraction, while humans concentrate on a deeper assessment of innovation potential and founder quality.
-* **Continuous Learning Systems.** Implementing feedback loops where human expert corrections continuously refine the LLM's evaluation criteria could improve system accuracy over time while maintaining its focus on pitch quality filtering.
-
-## 7.4 External Data Integration
-
-Future research could expand beyond pitch content to incorporate additional data sources:
-
-* **Market Context.** Integrating market research and competitive landscape analysis could provide contextual evaluation of startups' claims.
-* **Founder Background Verification.** Incorporating basic information from professional networks could validate team capability claims.
-* **Technological Validation.** For technology-heavy startups, incorporating patent analysis could strengthen the evaluation of innovation claims.
-* **Longitudinal Performance Tracking.** Monitoring startups' progress over time and correlating initial pitch quality with subsequent performance would enable refinement of ranking models.
-
-## 7.5 Expanded Filtering Framework
-
-Our current system focuses on pitch quality filtering to improve expert efficiency. Future research could expand this framework to include:
-
-* **Customizable Filtering Thresholds.** Allowing organizations to adjust filtering sensitivity based on their resource constraints and investment strategies.
-* **Adaptive Feedback Generation.** Creating more sophisticated feedback mechanisms for pitches that don't meet quality thresholds.
-* **Multi-Stage Filtering.** Progressively more detailed filters applied at different stages of the evaluation process.
-* **Risk Factor Identification.** Enhancing the system's ability to identify specific information gaps that increase uncertainty.
-
-## 7.6 Human-AI Interaction Studies
-
-A particularly valuable direction is the systematic study of how human experts interact with AI-filtered pitches:
-
-* **Attention Allocation Analysis.** Studies examining how expert attention shifts when LLM pre-filtering is implemented could quantify cognitive load reductions.
-* **Feedback Utilization Tracking.** Investigating how founders utilize automated feedback to improve pitch quality.
-* **Bias Reduction Measurement.** Longitudinal studies comparing potential bias indicators (such as founder demographic factors) between LLM-filtered and traditional selection processes.
-* **Comparative Ranking Accuracy.** Studies comparing the predictive accuracy of human-only, AI-only, and combined human-AI ranking approaches.
-
-# 8. Conclusion
-
-This research presents significant advancements in leveraging Large Language Models for startup pitch ranking, demonstrating that properly configured LLMs can effectively function as pitch quality filters in early-stage investment decisions. Through systematic experiments with multiple prompt engineering strategies and two LLM architectures, we establish key findings with important implications for venture capital practice.
-
-Our component-based evaluation approach (Setup 1) using the Anthropic model achieved remarkable alignment with human expert rankings (NDCG@10 = 0.908), particularly for the most promising startups. Even more significantly, ensemble approaches combining multiple evaluation runs achieved the highest performance (NDCG@10 = 0.924), suggesting that different prompt strategies capture complementary aspects of pitch quality. These findings validate the potential of LLM-powered systems to serve as effective first-pass filters in the venture evaluation process.
-
-Our research directly addresses the fundamental challenge identified in our problem statement: distinguishing between pitch quality and startup quality. By deploying LLMs as pitch quality filters, we reduce expert reviewers' cognitive load, allowing them to focus on evaluating substantive business factors rather than presentation elements. The system helps identify both substantively strong startups with less polished presentations and well-presented pitches with fundamental weaknesses in areas such as market sizing, business model clarity, and traction evidence.
-
-The instruction distillation methodology we developed — where LLMs analyze expert reviews to extract evaluation patterns without requiring explicit articulation of thought processes — represents a novel contribution applicable to other domains where expert judgment is difficult to formalize. By creating a debiased ground truth from independent expert evaluations and deriving a consistent review methodology that reflects their collective wisdom, we provide a framework for future ranking systems.
-
-For venture capital firms and platforms like Cyrannus, our LLM-based filtering system offers significant practical benefits: reduced resource requirements, enhanced consistency, improved scalability, and more timely feedback to founders. Startups filtered out during initial screening receive structured feedback for pitch improvement, creating an opportunity to refine their presentations and resubmit, converting potential false negatives into true positives while improving the overall quality of pitches that reach human experts.
-
-Despite these advances, we acknowledge important limitations. Our sample size (N = 35) is sufficient as a proof-of-concept that the methodology produces a real signal but is insufficient for strong external validity; a larger-N replication is the natural follow-up paper. LLMs occasionally miss nuanced aspects of startup potential that experienced investors might infer from subtle signals. Our system relies on the quality of pitch transcripts, which may not capture all informational elements. And like all AI systems, LLMs have inherent limitations, including potential biases and limited transparency in their reasoning processes.
-
-The most valuable insight from our research may be that LLMs excel not by replacing human experts but by complementing them — filtering for pitch quality so humans can focus on startup quality, providing consistent assessment at scale, and establishing a structured feedback mechanism. This complementary relationship addresses all four challenges we identified: resource limitations, consistency barriers, scalability constraints, and feedback efficiency.
-
-Our system demonstrates the potential of human-AI collaboration in complex decision domains, where each enhances the other's strengths while compensating for limitations. By reducing the influence of presentation quality and founder charisma on investment decisions, this approach points toward a future where artificial intelligence and human expertise work in concert to create more meritocratic funding opportunities for entrepreneurs and better investment outcomes for venture capitalists.
+---
 
 ## References
 
-1. Bender, E. M., Gebru, T., McMillan-Major, A., & Shmitchell, S. (2021). On the dangers of stochastic parrots: Can language models be too big? In *Proceedings of the 2021 ACM Conference on Fairness, Accountability, and Transparency* (pp. 610–623). ACM. https://doi.org/10.1145/3442188.3445922
+Bender, E. M., Gebru, T., McMillan-Major, A., & Shmitchell, S. (2021). On the dangers of stochastic parrots: Can language models be too big? In *Proceedings of the 2021 ACM Conference on Fairness, Accountability, and Transparency* (pp. 610–623). ACM.
 
-2. Bernstein, S., Korteweg, A., & Laws, K. (2017). Attracting early-stage investors: Evidence from a randomized field experiment. *The Journal of Finance*, 72(2), 509–538. https://doi.org/10.1111/jofi.12470
+Bernstein, S., Korteweg, A., & Laws, K. (2017). Attracting early-stage investors: Evidence from a randomized field experiment. *The Journal of Finance*, 72(2), 509–538.
 
-3. Bonini, S., & Capizzi, V. (2019). The role of venture capital in the emerging ecosystem of financing innovation. *Journal of Applied Corporate Finance*, 31(1), 34–48. https://doi.org/10.1111/jacf.12371
+Brooks, A. W., Huang, L., Kearney, S. W., & Murray, F. E. (2014). Investors prefer entrepreneurial ventures pitched by attractive men. *Proceedings of the National Academy of Sciences*, 111(12), 4427–4431.
 
-4. Brooks, A. W., Huang, L., Kearney, S. W., & Murray, F. E. (2014). Investors prefer entrepreneurial ventures pitched by attractive men. *Proceedings of the National Academy of Sciences*, 111(12), 4427–4431. https://doi.org/10.1073/pnas.1315085111
+Brown, T. B., Mann, B., Ryder, N., Subbiah, M., Kaplan, J., Dhariwal, P., … Amodei, D. (2020). Language models are few-shot learners. *Advances in Neural Information Processing Systems*, 33, 1877–1901.
 
-5. Brown, T. B., Mann, B., Ryder, N., Subbiah, M., Kaplan, J., Dhariwal, P., … Amodei, D. (2020). Language models are few-shot learners. *Advances in Neural Information Processing Systems*, 33, 1877–1901. https://arxiv.org/abs/2005.14165
+Chiang, C.-W., & Yin, M. (2021). You'd better stop! Understanding human reliance on machine learning models under covariate shift. In *Proceedings of the 13th ACM Web Science Conference* (pp. 120–129). ACM.
 
-6. Chiang, C.-W., & Yin, M. (2021). You'd better stop! Understanding human reliance on machine learning models under covariate shift. In *Proceedings of the 13th ACM Web Science Conference* (pp. 120–129). ACM. https://doi.org/10.1145/3447535.3462487
+Clark, C. (2008). The impact of entrepreneurs' oral "pitch" presentation skills on business angels' initial screening investment decisions. *Venture Capital*, 10(3), 257–279.
 
-7. Clark, C. (2008). The impact of entrepreneurs' oral "pitch" presentation skills on business angels' initial screening investment decisions. *Venture Capital*, 10(3), 257–279. https://doi.org/10.1080/13691060802088329
+Cumming, D., & Groh, A. (2018). The impact of entrepreneurial finance on start-up activity. *Journal of Banking & Finance*, 100, 253–269.
 
-8. Cumming, D., & Groh, A. (2018). The impact of entrepreneurial finance on start-up activity. *Journal of Banking & Finance*, 100, 253–269. https://doi.org/10.1016/j.jbankfin.2018.11.012
+Davenport, T., & Ronanki, R. (2018). Artificial intelligence for the real world. *Harvard Business Review*, 96(1), 108–116.
 
-9. Davenport, T., & Ronanki, R. (2018). Artificial intelligence for the real world. *Harvard Business Review*, 96(1), 108–116.
+Deloitte Insights. (2021). *Making the investment decision process more naturally intelligent.*
 
-10. Deloitte Insights. (2021). *Making the investment decision process more naturally intelligent.* https://www2.deloitte.com/content/dam/insights/articles/5075_CFS-AI-in-investment-decisions/DI_CFS-AI-in-investment-decisions.pdf
+Hochberg, Y. V., Ljungqvist, A., & Lu, Y. (2007). Whom you know matters: Venture capital networks and investment performance. *The Journal of Finance*, 62(1), 251–301.
 
-11. Gompers, P., & Lerner, J. (2001). The venture capital revolution. *Journal of Economic Perspectives*, 15(2), 145–168. https://doi.org/10.1257/jep.15.2.145
+Kamps, H. J. (2023). This AI will tell you if your pitch deck is good enough. *Medium*, 27 October.
 
-12. Hallen, B. L., & Eisenhardt, K. M. (2012). Catalyzing strategies and efficient tie formation: How entrepreneurial firms obtain investment ties. *Academy of Management Journal*, 55(1), 35–70. https://doi.org/10.5465/amj.2009.0620
+Maarouf, A., Feuerriegel, S., & Pröllochs, N. (2024). A fused large language model for predicting startup success. arXiv:2409.03668.
 
-13. Hochberg, Y. V., Ljungqvist, A., & Lu, Y. (2007). Whom you know matters: Venture capital networks and investment performance. *The Journal of Finance*, 62(1), 251–301. https://doi.org/10.1111/j.1540-6261.2006.00915.x
+OpenAI. (2023). *GPT-4 Technical Report.* arXiv:2303.08774.
 
-14. Kamps, H. J. (2023). This AI will tell you if your pitch deck is good enough. *Medium* (27 Oct).
+Pollack, J. M., Rutherford, M. W., & Nagy, B. G. (2012). Preparedness and cognitive legitimacy as antecedents to new venture funding in televised business pitches. *Entrepreneurship Theory and Practice*, 36(5), 915–939.
 
-15. Kollmann, T., & Kuckertz, A. (2010). Evaluation uncertainty of venture capitalist investment criteria. *Journal of Business Research*, 63(7), 741–747. https://doi.org/10.1016/j.jbusres.2009.05.003
+Serrano, C. J. (2010). The dynamics of the transfer and renewal of patents. *RAND Journal of Economics*, 41(4), 686–708.
 
-16. Maarouf, A., Feuerriegel, S., & Pröllochs, N. (2024). A fused large language model for predicting startup success. arXiv:2409.03668. https://arxiv.org/abs/2409.03668
+Tam, K. Y., & Kiang, M. Y. (2012). Managerial applications of text mining. *ACM Transactions on Management Information Systems*, 3(1).
 
-17. OpenAI. (2023). *GPT-4 Technical Report.* arXiv:2303.08774. https://arxiv.org/abs/2303.08774
-
-18. Petty, J. S., & Gruber, M. (2011). "In pursuit of the real deal": A longitudinal study of VC decision making. *Journal of Business Venturing*, 26(2), 172–188. https://doi.org/10.1016/j.jbusvent.2009.10.002
-
-19. Pollack, J. M., Rutherford, M. W., & Nagy, B. G. (2012). Preparedness and cognitive legitimacy as antecedents to new venture funding in televised business pitches. *Entrepreneurship Theory and Practice*, 36(5), 915–939. https://doi.org/10.1111/j.1540-6520.2012.00534.x
-
-20. Sahlman, W. A. (1990). The structure and governance of venture-capital organizations. *Journal of Financial Economics*, 27(2), 473–521.
-
-21. Serrano, C. J. (2010). The dynamics of the transfer and renewal of patents. *RAND Journal of Economics*, 41(4), 686–708. https://doi.org/10.1111/j.1756-2171.2010.00116.x
-
-22. Tam, K. Y., & Kiang, M. Y. (2012). Managerial applications of text mining. *ACM Transactions on Management Information Systems*, 3(1), 4:1–4:20. https://doi.org/10.1145/2089094.2089098
-
-23. West, J., & Bogers, M. (2014). Leveraging external sources of innovation: A review of research on open innovation. *Journal of Product Innovation Management*, 31(4), 814–831. https://doi.org/10.1111/jpim.12125
-
-24. Yankov, B., Ruskov, P., & Haralampiev, K. (2014). Models and tools for technology start-up companies success analysis. *Economic Alternatives*, 3, 15–24. ISSN 1314-0173.
+Yankov, B., Ruskov, P., & Haralampiev, K. (2014). Models and tools for technology start-up companies success analysis. *Economic Alternatives*, 3, 15–24.

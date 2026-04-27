@@ -1,1853 +1,303 @@
 # LENS: A Mathematical Foundation for Human Decision-Systems Engineering
 
-**Authors:** Mikhail L. Arbuzov, Lee Mosbacker
-**Affiliation:** Cyrannus Inc.
-**Date:** 2025
-**Corresponding author:** [to be filled]
+**Mikhail L. Arbuzov, Lee Mosbacker**
 
-**Keywords:** human decision systems, multi-stage selection, systematic bias, committee aggregation, order statistics, evaluator architecture, log-odds, venture capital
-
-## Abstract
-
-We present LENS (Layered Evaluation with Noise and Systematic-bias), a unified mathematical framework for engineering multi-stage human selection systems. Decomposing perceived quality as `logit(q̂) = logit(q) + βᵀx + ε` — true quality plus a feature-aligned systematic bias plus random noise — yields a single decomposition that explains six otherwise-disconnected phenomena practitioners recognize but cannot derive: the winner's curse, the contrarian advantage, the homogeneity trap, batch-evaluation superiority, the committee paradox, and the disproportionate power of recommendations. The framework operates in log-odds space to keep probabilities bounded and to capture how biases compound multiplicatively across stages. From this single equation we derive design principles for multi-stage architectures, including a batch-superiority theorem, a committee-aggregation theorem under correlated bias, and a stage-sequencing heuristic. Calibration on committee-aggregated expert scores (N = 35 startups, k = 10 raters) demonstrates that systematic biases persist despite averaging (β_merit = 0.79, β_delivery = 0.297), validating the core prediction that committee size alone cannot eliminate correlated biases. The model unifies fragmented insights from operations research, behavioral economics, signal detection theory, and organizational behavior into actionable guidelines for **Human Decision-Systems Engineering (HDSE)**. Comprehensive empirical and simulation validation appears in companion papers in the trilogy.
-
-> **Data availability.** The underlying startup data — names, transcripts, founder contact information — is confidential and not shared. All analyses use anonymized derivatives in [`code/data/`](code/data/), where each startup is identified by a stable opaque ID. Anonymized aggregated scores are sufficient to reproduce the calibration results reported in §6; the closest reproducible analog is [`code/paper1_calibration/calibrate_beta.py`](code/paper1_calibration/calibrate_beta.py).
-
-> **Sample size.** N = 35 is sufficient as a first demonstration that LENS parameters can be estimated from real committee judgments and that systematic biases survive averaging. Larger-N replication and per-rater identification of β are out of scope for this paper; comprehensive simulation validation is in Paper 2 of the trilogy.
+*Cyrannus Inc., 2025. First paper in the LENS trilogy. This paper develops the framework. Paper 2 validates it through Monte Carlo simulation across eleven investor archetypes. Paper 3 instantiates its AI-filter component in a working system that ranks startup pitches in alignment with a ten-expert crowd at NDCG@20 = 0.923.*
 
 ---
 
-## 0. Notation and Assumptions
+## Abstract
 
-**Symbol Table:**
+Practitioners across selection-heavy domains see the same patterns repeatedly. The startup that wins the competitive bidding round tends to be the one whose investor most overestimated. Hiring committees that grew from three members to twelve do not become less biased — only more confident. Recommendations get response rates an order of magnitude higher than cold introductions. Contrarian portfolios outperform consensus picks. Each of these is treated in the practitioner literature as its own phenomenon with its own folk explanation. They are not separate phenomena.
 
-* q: True quality/success probability
-* q̂: Perceived quality
-* β: Systematic bias vector
-* ε: Random noise term
-* x: Observable feature vector
-* i: Candidate index
-* j: Evaluator index
-* k: Committee size
-* n: Candidate pool size
-* s: Number selected
-* ρ_β: Correlation between evaluators' bias vectors
-* ρ_ε: Correlation between evaluators' random errors
+This paper develops LENS — Layered Evaluation with Noise and Systematic-bias — a single mathematical decomposition that derives all of them from one model. We write perceived quality as $\mathrm{logit}(\hat q) = \mathrm{logit}(q) + \beta^\top x + \varepsilon$: true quality, plus a feature-aligned systematic bias, plus random noise, all in log-odds space. From this one equation we derive the design principles practitioners reach for intuitively but cannot derive: why batch evaluation outperforms sequential review, why committee size reduces noise but not correlated bias, why the winner of competitive bidding overestimates, why architecture matters more than evaluator skill. The framework's parameters can be calibrated from real evaluation data. We do so on N = 35 startups with a ten-expert panel and find $\beta_{\mathrm{merit}} = 0.79$ and $\beta_{\mathrm{delivery}} = 0.297$ — systematic biases that survive ten-fold averaging, exactly as the framework predicts.
 
-**Key Assumptions:**
+The contribution is not any single result. Each individual result is in the literature somewhere: Capen, Clapp & Campbell (1971) named the winner's curse; Kahneman, Sibony & Sunstein (2021) named noise; McPherson, Smith-Lovin & Cook (2001) named homophily. The contribution is that one decomposition explains all of them, that it has bite as a calibration target, and that it generates design rules — what we call **Human Decision-Systems Engineering (HDSE)** — for the multi-stage selection processes organizations actually run.
 
-1. Independence of noise conditional on features: E[ε|x] = 0
-2. Evaluator biases remain static within evaluation period
-3. Log-odds transformation preserves orthogonality: E[βᵀx · ε] = 0
-4. Committee members form perceptions independently before aggregation
+> **Data availability.** The underlying startup data is confidential. The closest reproducible analog of the calibration in §6 is [`code/paper1_calibration/calibrate_beta.py`](../code/paper1_calibration/calibrate_beta.py) running against [`code/data/startup_evaluations_avg_anon.csv`](../code/data/startup_evaluations_avg_anon.csv). The published $\beta_{\mathrm{merit}} = 0.79$, $\beta_{\mathrm{delivery}} = 0.297$ values come from a feature decomposition (substantive content vs. presentation style) on per-rater human judgments not present in the public anonymized data; the script computes the closest available alternative — a regression of expert score on AI-derived component scores — for the public reproduction case. See §6.4.
+>
+> **Sample size.** N = 35 is sufficient to demonstrate the framework's parameters can be estimated from real committee judgments and that systematic biases survive ten-fold averaging. Larger-N replication and per-rater identification of $\beta$ are out of scope; comprehensive simulation validation is in Paper 2.
 
-**Boundary Conditions Box: LENS applies when:**
+**Keywords:** human decision systems, multi-stage selection, systematic bias, committee aggregation, order statistics, evaluator architecture, log-odds, venture capital.
 
-* Multiple evaluators assess candidates on bounded probability scales
-* Observable features systematically influence judgments
-* Architectural choices (batch size, committee structure, stages) are designable
-* Outcomes are eventually observable for calibration
+---
 
-**LENS may fail when:**
+## 0. Notation
 
-* Evaluators strategically misreport beliefs
-* Dynamic learning rapidly changes bias parameters
-* Strong non-linearities dominate linear approximations
-* Extreme selection rates (s/n < 0.001 or s/n > 0.999) amplify tail behavior
+The paper uses the following symbols throughout. The reader who prefers prose to symbols can skip this section and refer back as needed; everything is reintroduced in context where it first appears.
+
+$q$ is the true success probability of a candidate (unknown to evaluators). $\hat q$ is an evaluator's perceived success probability. $\beta$ is the systematic bias vector — how an evaluator over- or under-weights the components of $x$ relative to their true predictive value. $x$ is the observable feature vector (credentials, presentation quality, demographics, prior signals). $\varepsilon$ is the random noise term (fatigue, mood, irreducible uncertainty). $i$ indexes candidates, $j$ indexes evaluators, $k$ is committee size, $n$ is candidate-pool size, $s$ is the number selected. $\rho_\beta$ and $\rho_\varepsilon$ are the cross-evaluator correlations of bias and noise respectively.
+
+The model assumes evaluator biases are static within an evaluation period, that noise is conditionally independent of features given the systematic component (so $E[\varepsilon \mid x] = 0$), and that committee members form perceptions independently before aggregation. The framework applies when multiple evaluators assess candidates on bounded probability scales, observable features systematically influence judgments, and the architecture (committee structure, batch size, stage count) is something a designer can change. It applies less well when evaluators strategically misreport their beliefs, when bias parameters shift on faster timescales than the estimation window, when extreme selection rates push the analysis into tail behavior the linear approximation cannot capture, or when strong nonlinearities or interactions dominate the linear $\beta^\top x$ term.
 
 ---
 
 ## 1. Introduction
 
-Practitioners across selection-heavy domains repeatedly encounter the same patterns. A venture capitalist loses money on a "sure thing" that crashed after a competitive bidding process. An HR executive watches a genuine diversity initiative produce a culturally homogeneous team. A foundation program officer sees prestigious applicants win despite mediocre proposals. These are not random organizational failures; they are predictable consequences of how systematic biases and random noise propagate through multi-stage evaluation architectures.
+A founder pitches to ten venture firms over a two-month fundraising process. Three firms make offers. The founder accepts the highest valuation — fifteen percent above the second-best offer. The winning firm celebrates internally: they beat tier-one competitors for the deal. Two years later, the startup fails to find product-market fit and shuts down. The winning firm runs a post-mortem and concludes they were forty percent above fair value at entry. The partners ask one another: why do we keep losing money on deals we *win*?
 
-This paper develops the LENS framework — Layered Evaluation with Noise and Systematic-bias — and uses it to introduce **Human Decision-Systems Engineering (HDSE)**: the systematic, model-driven design of processes that transform dispersed human judgments into high-quality collective decisions. We motivate LENS through six recognizable phenomena (§1), connect it to its disconnected antecedents in the literature (§2), formally state the model and its theorems (§3–§4), explain each phenomenon as a consequence of the model (§5), calibrate it on committee-aggregated expert scores (§6), and discuss boundary conditions and a forward research agenda (§7–§8).
+Across the building, in a different industry, an HR executive runs a recruiting initiative explicitly designed for diversity. Blind résumé screening is implemented. Outreach is broadened to non-traditional channels. Three years later, the engineering team is ninety percent from the same demographic and educational background, despite no individual decision having had that goal. The director runs the same kind of post-mortem and concludes the team must have been unconsciously biased — though by every observable measure, they followed the procedure.
 
-A note on order: §1 uses the perception model — `logit(q̂) = logit(q) + βᵀx + ε` — informally to motivate the six phenomena; §3 introduces it formally. Readers preferring the formalism first can read §3 before returning to §1.
+A grant program officer notices that the proposals winning their committee's review have a particular flavor — credentialed, conventional, from prestigious institutions. The committee was deliberately expanded from three members to twelve to fix this. The bias did not budge. The committee got more confident in its choices but did not change them.
 
-### Six Puzzling Phenomena
+These three cases are taken to be three different problems. The first is a story about discipline at the bidding table. The second is a story about unconscious bias in hiring. The third is a story about institutional capture. Each has its own folk-corrective: be more disciplined, run more bias training, expand the committee further. Each corrective is mostly ineffective. They are mostly ineffective because the underlying mechanism is the same in all three cases, and the folk-correctives target the wrong layer.
 
-We begin by examining six patterns that sophisticated practitioners recognize but struggle to explain.
+This paper introduces the framework that makes the underlying mechanism visible. We model perceived candidate quality as a noisy, biased perception of true quality, working in log-odds space so probabilities stay bounded:
 
-#### Phenomenon 1: The Winner's Curse
+$$\mathrm{logit}(\hat q) = \mathrm{logit}(q) + \beta^\top x + \varepsilon.$$
 
-**The pattern**: In competitive deal flow, winning the startup often means overpaying. A company pitches to 10 VCs and receives 3 term sheets. The founder accepts the highest valuation. Two years later, the startup fails. The winning VC realizes they paid 40% above fair value and wonders: "Why do we keep losing money on deals we 'win'?"
+True quality $q$ is what the candidate actually delivers if selected. The evaluator never observes $q$ directly. They observe a transformed version, distorted by their own systematic over- and under-weightings of the candidate's features ($\beta^\top x$, where $\beta$ is the evaluator's bias vector and $x$ is the feature vector) plus random noise ($\varepsilon$). All of the puzzling patterns above — the winner's curse, the homogeneity trap, the committee paradox — fall out of this single decomposition, with no further moving parts.
 
-**What practitioners think**: "We got too excited. We should have been more disciplined." They treat this as execution failure.
+The winner's curse is order statistics on $\varepsilon$: in $N$-way competition the bidder selected as the winner is mechanically the one whose perception was furthest above the average, so $E[\varepsilon_{\mathrm{winner}}] \approx \sigma_\varepsilon \sqrt{\log N}$. This is structural, not psychological, and it does not require any of the evaluators to be biased. The homogeneity trap is multiplicative compounding of small per-stage biases through a multi-stage pipeline: a bias of $0.2$ in log-odds per stage compounds to $e^{0.8} \approx 2.2 \times$ multiplicative advantage over four stages. The committee paradox is variance algebra under correlated $\beta_j$: averaging $k$ committee members reduces noise as $\sigma_\varepsilon / \sqrt{k}$ but reduces bias as $\sigma_\beta \sqrt{\rho_\beta + (1-\rho_\beta)/k}$, which only collapses to zero when the committee members' biases are uncorrelated.
 
-**The deeper truth**: This outcome is mechanically inevitable given order statistics. In competitive settings where multiple evaluators bid on the same asset, the winner is the one who made the largest positive error in their estimate. Order statistics guarantee that E[ε_winner] ≈ 1.5 σ_ε for 10 competitors — the winning bidder typically perceives quality 1.5 standard deviations above the true mean. This is structural, not psychological [Capen, Clapp & Campbell, 1971; Thaler, 1988].
+These three results are not new. The winner's curse goes back to Capen, Clapp & Campbell (1971); homophily compounding to McPherson, Smith-Lovin & Cook (2001); the variance-of-correlated-averages formula to any standard statistics text. What is new is that one decomposition derives all of them, that the same decomposition keeps deriving the patterns when we apply it to batch evaluation, contrarian advantage, recommendation power, and stage-sequencing — and that the parameters $\beta$ and $\sigma_\varepsilon$ can be estimated from real evaluation data. The framework is not just an analytical lens; it is a calibration target.
 
-#### Phenomenon 2: The Contrarian Advantage
+What that calibration target gives us is the move from diagnosis to engineering. Diagnosing that a hiring committee is biased and should "do better" is what current practice produces. Engineering the hiring process to *minimize the conditions under which bias compounds across stages* is what the framework produces. We call the engineering practice **Human Decision-Systems Engineering (HDSE)**: the systematic, model-driven design of multi-stage selection processes that transform dispersed human judgments into high-quality collective decisions. Paper 2 of this series demonstrates HDSE in practice, simulating eleven investor archetypes and showing that platform architectures with good HDSE outperform elite venture firms with bad HDSE. Paper 3 instantiates the AI-filter component of one such platform.
 
-**The pattern**: Industry conventional wisdom says don't invest in certain sectors — deep tech takes too long, hardware has low margins, unfashionable verticals lack exit opportunities. A contrarian VC ignores consensus and invests anyway, generating above-average reported returns while consensus picks in hot sectors often disappoint [Kerr, Lerner & Schoar, 2014].
+The rest of this paper proceeds as follows. Section 2 places LENS in the disconnected literatures it draws from — operations research, behavioral economics, signal detection theory, organizational behavior, network theory — and shows what each provides that LENS uses, and what each lacks that LENS fills in. Section 3 develops the model formally, building from a simple error decomposition to the full log-odds form. Section 4 states the three load-bearing theorems: batch superiority, committee aggregation under correlated bias, and the winner's curse. Section 5 walks through the six phenomena named above plus three others, deriving each as a consequence of the model rather than treating them as separate puzzles. Section 6 calibrates the model on a real expert panel. Sections 7 and 8 discuss boundary conditions and the research agenda that connects this paper to Papers 2 and 3. Section 9 concludes.
 
-**What practitioners think**: "Contrarian investors are smarter" or "They have better deal access." They attribute success to individual capability.
-
-**The deeper truth**: When group consensus creates positive bias (β_group > 0 for consensus startups) and negative bias (β_group < 0 for contrarian startups), the funding threshold logit(q̂) > -4.6 (≈1% success probability) requires contrarian startups to have HIGHER true quality. If β_consensus = +0.7 and β_contrarian = -0.7, contrarian startups need 4× higher success probability to receive the same treatment. The mathematical structure ensures contrarian portfolios have superior average quality.
-
-#### Phenomenon 3: The Homogeneity Trap
-
-**The pattern**: A tech company genuinely prioritizes diversity. The first two engineers happen to share an ethnic and educational background. Blind resume screening is implemented. Diverse outreach initiatives are launched. Three years later, engineering is 90% from that same background despite nobody intending this outcome. Similar patterns appear everywhere: finance teams dominated by Ivy League graduates, academic departments composed of an advisor's academic descendants, investor syndicates clustering by geography.
-
-**What practitioners think**: "This must be discrimination" or "Maybe candidates from this background really are better for our tech stack." They miss the mathematical structure.
-
-**The deeper truth**: Once a few engineers from a given background are in place, candidates from the same background receive subtle positive evaluation bias from shared language, culture, and referral networks — perhaps β_shared = +0.2 in log-odds per stage. This seems negligible. But with four interview stages, those candidates accumulate +0.8 in log-odds = 2.2× multiplicative advantage (e^0.8 ≈ 2.2) over identically qualified candidates from other backgrounds. As the team's composition shifts, more interviewers share the bias, creating runaway feedback: initial advantages compound exponentially as e^(β_homophily × n_stages × fraction_shared_background) [McPherson, Smith-Lovin & Cook, 2001].
-
-#### Phenomenon 4: Why Startups Are Evaluated in Batches
-
-**The pattern**: Y Combinator's Demo Day presents 200+ startups in a single event. Techstars runs cohort-based accelerators. Elite VCs hold "batch office hours" reviewing 10-15 pitches per session. Even individual angels often wait to evaluate deals in monthly batches rather than one-at-a-time. This batching seems like mere logistics—but it's a systematic pattern across the entire industry.
-
-**What practitioners think**: "Batching is just more convenient for scheduling" or "Demo Days are marketing events." They don't see the decision quality implications.
-
-**The deeper truth**: Sequential evaluation creates two critical problems. First, threshold drift: after seeing three weak pitches, an average one looks great (threshold shifts ±0.5 in log-odds based on recent observations). Second, calibration impossibility: without simultaneous comparison, you can't tell if this startup is top 5% or top 15%. Batch evaluation solves both through order statistics. When selecting top k from n, even if individual evaluations have noise σ_ε, the expected quality advantage is σ_ε × Φ^(-1)((n-k+1)/n). For selecting 2 from 10 startups, batch evaluation delivers ~0.5 better in log-odds ≈ going from 7% to 12% true success probability.
-
-#### Phenomenon 5: The Committee Paradox
-
-**The pattern**: An academic hiring committee expands from 3 to 12 members to increase diversity of opinions. Despite quadrupling the committee size, the department consistently hires the same profile: theorists over systems researchers, Cambridge graduates over state school PhDs. More voices didn't reduce bias. Similarly, corporate hiring panels grow but still favor candidates from prestigious firms; grant review committees expand but still favor applicants from top institutions.
-
-**What practitioners think**: "We need even more committee members" or "The culture is just too strong." They don't understand the mathematical limits.
-
-**The deeper truth**: Committee averaging reduces total variance as σ²_total/k, but only reduces systematic bias if committee members have uncorrelated bias vectors (ρ_β ≈ 0). If all 12 committee members graduated from elite schools, they share β_elite_school > 0. Averaging doesn't cancel: β̄_elite ≈ β_elite regardless of k. Meanwhile, random noise drops dramatically: σ_ε,committee = σ_ε,individual/√12 = 0.29× original. The result: committee is MORE confident (lower variance) but EQUALLY biased. Precision without accuracy. A homogeneous committee of 12 can be worse than a diverse committee of 3.
-
-#### Phenomenon 6: The Disproportionate Power of Recommendations
-
-**The pattern**: A cold email to a top VC gets 1-2% response rate. A warm introduction from a trusted operator gets 50%. Employee referrals are hired at 3× the rate of job board applicants. Grant proposals with strong endorsements receive 2.5× higher scores. The recommendation advantage seems mysteriously large—far beyond what "social proof" would suggest.
-
-**What practitioners think**: "Recommendations show trustworthiness" or "It's just human nature to favor people we know." They treat it as soft social dynamics.
-
-**The deeper truth**: Recommendations function as **cost-free first-stage filters with aligned biases**. When a recommender pre-screens 200 candidates in their network and introduces 20 to an evaluator, this is equivalent to adding Stage 0 to your pipeline at zero cost. If β_recommender ≈ β_evaluator (aligned biases, ρ_β ≈ 0.8), the recommender successfully predicts which candidates the evaluator would have advanced. For wide-funnel processes (VC reviewing 1,000 cold pitches, hiring managers seeing 500 applications), recommendations save 95-99% of screening costs while maintaining quality. But there's a dark side: because recommenders share backgrounds/networks with evaluators (homophily), recommendations amplify the same biases that create homogeneity. The efficiency of referral-driven hiring is precisely why it produces culturally uniform teams.
-
-### The Hidden Connection
-
-These six phenomena seem to span different domains:
-
-* Winner's curse is about auction theory and competition
-* Contrarian advantage is about market inefficiency and herding
-* Homogeneity is about organizational culture and unconscious bias
-* Batch evaluation is about operational efficiency
-* Committee paradox is about collective intelligence and voting
-* Recommendation power is about networks and social capital
-
-But they all emerge from the same mathematical structure: human evaluators perceive quality through systematically biased lenses, and different architectural choices propagate these biases in predictable ways.
-
-### The LENS Framework
-
-We present LENS (Layered Evaluation with Noise and Systematic-bias) as a unified explanation. The core equation is deceptively simple:
-
-**logit(q̂) = logit(q) + β^T x + ε**
-
-Where:
-
-* **q**: True success probability (unobservable at decision time)
-* **q̂**: Perceived success probability (what evaluator believes)
-* **β**: Systematic bias vector (how evaluator over/under-reacts to observable features)
-* **x**: Observable feature vector (credentials, presentation quality, demographics)
-* **ε**: Random noise (fatigue, mood, irreducible uncertainty)
-
-This equation captures three realities:
-
-1. **True quality is never directly observable**: Every evaluator sees a distorted version through their lens
-
-2. **Systematic biases create predictable patterns**: β_pitch > 0 means this evaluator overweights presentation; β_elite_school > 0 means they favor prestigious credentials
-
-3. **Random noise adds irreducible uncertainty**: Even the same evaluator viewing the same candidate on different days produces different estimates
-
-Working in log-odds space (logit transformation) ensures probabilities remain bounded [0,1] while capturing how biases compound multiplicatively. Importantly, field evidence shows pitch quality not only inflates weak startups' perceived quality but can also deflate strong ones—exactly what logit transformation naturally models.
-
-From this one equation, all six phenomena follow:
-
-* **Winner's curse**: Order statistics dictate E[ε_max] ≈ σ_ε√(log N) for N competitors
-* **Contrarian advantage**: threshold_funding - β_contrarian > threshold_funding - β_consensus requires q_contrarian > q_consensus
-* **Homogeneity trap**: Sequential stages accumulate biases as Σβ_i across stages; if biases align, this compounds exponentially
-* **Batch superiority**: Ranking via order statistics beats sequential thresholding by ~σ_ε × selection_effect
-* **Committee paradox**: Var(β̄) = σ²_β[ρ_β + (1-ρ_β)/k]; correlated biases don't average out
-* **Recommendation power**: Pre-filtering at Stage 0 with β_recommender ≈ β_evaluator = cost-free quality boost + homophily amplification
-
-### Why This Matters: From Diagnosis to Engineering
-
-Existing frameworks document these problems but don't solve them:
-
-**Behavioral economics** (Kahneman, Tversky, Ariely): Documents cognitive biases extensively but lacks multi-stage optimization principles. Offers "decision hygiene" checklists rather than design calculus.
-
-**Operations research** (stage-gate processes, optimal stopping): Optimizes information acquisition timing but assumes unbiased evaluators. Treats humans as perfect Bayesian updaters.
-
-**Wisdom of crowds** (Galton, Surowiecki, Page): Explains why aggregation helps with independent errors but ignores architectural choices and correlated biases.
-
-**Signal detection theory** (Green & Swets, SDT): Provides rigorous framework for individual observers but doesn't extend to committees, sequences, or heterogeneous evaluator pools.
-
-**Organizational behavior** (diversity research, hiring bias studies): Documents disparate impact but lacks mathematical formulation for architectural design.
-
-LENS bridges these disconnected literatures by providing:
-
-1. **A unified mathematical framework**: One equation explains seemingly unrelated phenomena
-2. **Actionable design principles**: Derived theorems specify optimal architectures
-3. **Quantitative predictions**: Specific numbers for how much batch evaluation improves quality, how committee size trades off against diversity, when contrarian strategies outperform
-4. **Engineering mindset**: Treats decision systems as designable artifacts, not immutable constraints
-
-### Contributions
-
-This paper makes three primary contributions:
-
-**Theory**: First integrated bias-noise model for multi-stage, multi-evaluator systems operating in log-odds space with explicit feature-based systematic biases
-
-**Design Principles**:
-
-* Batch Evaluation Theorem: quantifies quality advantage through order statistics
-* Committee Aggregation Theorem: decomposes variance reduction into noise (improves by 1/k) and bias (only improves if ρ_β ≈ 0)
-* Winner's Curse Quantification: expected overestimation scales as σ_ε√(log N)
-* Contrarian Quality Gap: contrarian opportunities require ~2|β_contrarian| higher true quality
-* Stage Sequencing Heuristic: optimal advancement rate ≈ √(C_early/C_late)
-* Recommendation Value Formula: efficiency gains scale with ρ_β but create homophily risks
-
-**Unification**: Framework spans operations research (multi-stage optimization), behavioral economics (systematic bias + noise), signal detection theory (threshold calibration), organizational behavior (diversity effects), and network theory (referral dynamics)
-
-### Paper Organization
-
-The remainder of this paper proceeds as follows:
-
-**Section 2** reviews relevant literatures, identifying specific gaps LENS addresses
-
-**Section 3** develops the LENS mathematical framework, building from simple error models to the full log-odds decomposition
-
-**Section 4** states core theorems and derives design principles
-
-**Section 5** explains each of the six phenomena in detail, showing how LENS predicts specific patterns and magnitudes
-
-**Section 6** presents empirical calibration on committee-aggregated startup evaluations (N=35, k=10), demonstrating systematic biases persist despite averaging
-
-**Section 7** discusses boundary conditions, failure modes, and when LENS does/doesn't apply
-
-**Section 8** outlines the research agenda, positioning this theory paper within the larger trilogy
-
-**Section 9** concludes with implications for organizational design
-
-This paper establishes theoretical foundations with initial calibration. **Paper 2** validates principles through comprehensive simulation across 2,200 configurations and 10 evaluator archetypes. **Paper 3** implements LENS-guided AI augmentation, demonstrating 70% cost reduction at 105% quality in real deployment.
-
-But first, we need to understand why these six patterns emerge—and what mathematics governs them. Once you see the framework, you can't unsee these patterns. Every hiring pipeline, investment decision, and admissions process becomes a system to engineer rather than accept.
+A note on the order of arguments. We use the perception model informally in §1 and §5 before introducing it formally in §3. The reader who prefers the formalism first should read §3 before §5. Nothing in §5 is rigorous on its own; the work that makes the §5 patterns derivable is in §3 and §4.
 
 ---
 
 ## 2. Related Work
 
-The challenge of optimizing multi-stage human decision systems draws from several foundational literatures that have evolved independently. While each domain offers sophisticated insights, their integration into a unified framework for human judgment engineering remains absent. We examine five cornerstone research streams, demonstrating how LENS bridges these previously disconnected foundations.
+LENS sits at the intersection of five literatures that have evolved largely independently of one another. Each has produced sophisticated tools for some piece of the multi-stage selection problem. None has produced a unified framework that combines them.
 
-### 2.1 Wisdom of Crowds and Aggregation Theory
+**Wisdom of crowds and aggregation theory.** Galton's 1907 *Vox Populi* established the foundational result: 787 fairgoers' median estimate of an ox's weight (1,207 pounds) was within nine pounds of the true weight (1,198), demonstrating that aggregated judgments under independence and motivation can outperform individual experts. Condorcet's Jury Theorem (1785) gave the formal version: if individual accuracy exceeds 50% and errors are independent, group accuracy approaches certainty as group size grows. Page (2007) extended the result to diversity of perspective, showing that heterogeneity among aggregators is what drives the gain. These results assume single-stage aggregation with independent errors. They do not address what happens when aggregation runs across multiple sequential stages with correlated biases — which is the case in every real hiring, admissions, or investment process.
 
-Galton's 1907 "Vox Populi" established the empirical foundation for collective intelligence [1]. Analyzing 787 fairgoers' estimates of an ox's weight, Galton discovered the median estimate achieved remarkable accuracy (1,207 vs. 1,198 pounds), demonstrating that aggregated judgments could outperform individual experts. This finding sparked a century of research into crowd wisdom mechanisms.
+**Noise and bias decomposition.** Kahneman, Sibony & Sunstein (2021) is the most prominent recent treatment of the diagnostic problem: their decomposition of mean squared error into bias-squared plus noise-squared is the same starting point we take in §3, and their distinction among level noise (different evaluators run hot or cold), pattern noise (different evaluators weight features differently), and occasion noise (the same evaluator inconsistent across days) maps precisely onto the components of LENS. Their treatment is descriptive — they document the magnitude of the problem, including a famous result that 55% of insurance underwriters' premium estimates for identical cases fall outside a defensible range. The descriptive treatment stops short of an optimization framework: how should you design the architecture given the noise decomposition? That is the gap LENS addresses.
 
-The mathematical formalization emerged through Condorcet's Jury Theorem, proving that if individual accuracy exceeds 50% and errors are independent, group accuracy approaches certainty as size increases [2]. Page later advanced this with the Diversity Prediction Theorem: Collective Error = Average Individual Error - Predictive Diversity, making explicit that diversity, not just accuracy, drives collective performance [3].
+**Signal detection theory.** Green & Swets (1966) laid the foundations of how evaluators distinguish signal from noise under bounded uncertainty, separating sensitivity ($d'$) from response criterion ($\beta$). Receiver operating characteristic curves characterize the entire trade-off space. The Sequential Probability Ratio Test (Wald 1947) extends SDT to dynamic settings. The framework handles individual observers making binary decisions well; it has been less extensively applied to committees, multi-stage architectures, or evaluator pools with heterogeneous biases.
 
-However, these frameworks assume single-stage aggregation with independent errors. Real decision systems involve sequential stages where errors correlate and propagate. The wisdom of crowds literature provides no guidance for architecting multi-stage processes or handling systematic biases that persist through averaging.
+**Multi-stage screening in operations research.** Cooper's Stage-Gate process (1990) — adopted by roughly 80% of North American firms in some form — divides product or proposal evaluation into discrete stages with go/no-go gates. Empirical work shows substantially higher success rates for stage-gate adopters. Stochastic programming, optimal stopping (Smith & Nau, 1995), and real-options frameworks formalize when to advance versus reject as information accumulates. These models optimize information acquisition timing. They generally assume unbiased evaluators at each stage — a simplification that disappears in actual organizational settings.
 
-### 2.2 Noise and Bias Decomposition
+**Committee theory and network effects.** Arrow's Impossibility Theorem (1963) and the social-choice literature characterize fundamental limits on preference aggregation. Empirical work on committee composition consistently identifies a sweet spot of five to nine members. Granovetter's (1973) "strength of weak ties" and the broader homophily literature (McPherson, Smith-Lovin & Cook, 2001) document how networks transmit information, opportunity, and selection bias simultaneously. Brooks et al. (2014) showed that identical pitches are rated differently when delivered by attractive men. Each of these is a piece of the architecture-design puzzle. None directly provides architecture-design rules for the multi-stage case.
 
-Kahneman, Sibony, and Sunstein's "Noise" (2021) revolutionized understanding of human judgment variability [4]. Their decomposition—Mean Squared Error = Bias² + Noise²—elegantly separates systematic distortion from random variation. They further decompose noise into level (between-judge), pattern (within-judge consistency), and occasion (temporal variation) components.
-
-Their insurance audit revealing 55% premium variations for identical cases demonstrates noise's practical impact. Yet despite comprehensive treatment of judgment variability, the framework remains fundamentally descriptive. It offers no mathematical formulation for multi-stage systems, no optimization principles for architectural design, and no integration with formal decision theory. The work establishes the problem but not the solution.
-
-### 2.3 Signal Detection Theory
-
-Green and Swets (1966) provided the mathematical foundation for understanding detection under uncertainty [5]. Their framework separates sensitivity (d') from response criterion (β), enabling rigorous analysis of human perceptual decisions. SDT's receiver operating characteristic (ROC) curves completely characterize detection performance across all possible thresholds.
-
-Extensions to medical diagnosis, quality control, and radar operation demonstrate SDT's versatility. The Sequential Probability Ratio Test extends SDT to dynamic contexts, allowing optimal stopping when sufficient evidence accumulates [6]. However, SDT focuses on individual observers making binary decisions. Application to committees, multi-stage architectures, or heterogeneous evaluator pools remains largely unexplored. The framework handles noise but not systematic biases tied to observable features.
-
-### 2.4 Multi-Stage Screening in Operations Research
-
-Cooper's Stage-Gate® process, adopted by ~80% of North American firms, divides innovation into discrete stages with go/no-go decisions [7]. Empirical studies show 2.5× higher success rates for stage-gate adopters. The framework recognizes that different information becomes available at different stages, warranting progressive evaluation.
-
-Operations research has formalized multi-stage selection through optimal stopping theory, stochastic programming, and real options frameworks [8]. These models optimize resource allocation across stages, determining when to abandon versus continue evaluation. Yet a critical gap remains: these models assume unbiased evaluation at each stage. They optimize information acquisition timing but ignore human judgment limitations. No framework combines multi-stage architecture optimization with realistic models of biased human evaluators.
-
-### 2.5 Committee Decision Theory
-
-Committee aggregation theory spans voting theory, social choice, and judgment aggregation. Arrow's Impossibility Theorem establishes fundamental limits on preference aggregation [9]. Proper scoring rules ensure truthful probability revelation in group settings. Research on optimal committee size consistently suggests 5-9 members balance information gains against coordination costs [10].
-
-Recent work explores how committee composition affects outcomes. Diverse committees reduce systematic biases but may increase coordination challenges. Hierarchical Bayesian models weight members by demonstrated accuracy. Yet these advances focus on single-stage decisions. How should committee composition vary across stages? How do biases propagate through sequential committee decisions? The literature remains silent.
-
-### 2.6 Network Effects and Referral Systems
-
-Research on recommendations and referrals spans network theory, labor economics, and social capital. Granovetter's "strength of weak ties" shows diverse networks provide better information [11]. Studies document that employee referrals reduce search costs but may amplify homogeneity [12]. The "old boys' network" in venture capital demonstrates how insular networks perpetuate inequality [13].
-
-Yet this literature treats recommendations primarily as information signals or social proof, missing the architectural insight: recommendations function as distributed, zero-cost first-stage filters. No framework quantifies the trade-off between efficiency gains (cost reduction) and bias amplification (homogeneity increase) as a function of bias alignment between recommenders and evaluators.
-
-### 2.7 The Integration Gap
-
-Despite sophisticated developments within each domain, no framework unifies these insights. Wisdom of crowds explains aggregation benefits but ignores sequential architectures and batch effects. Noise research documents judgment variability but lacks optimization principles. SDT handles individual detection but not committees. Stage-gate processes lack bias awareness. Committee theory ignores multi-stage dynamics. Network research on referrals doesn't model them as architectural components.
-
-Most critically, no existing framework employs the mathematical structure we propose: modeling perceived quality as logit(q̂) = logit(q) + β^T X + ε. This formulation, operating in log-odds space with explicit bias decomposition, appears nowhere in the literature despite its natural advantages for bounded probability judgments.
-
-LENS addresses this gap by providing the first unified framework that combines multi-stage architectures, heterogeneous biases, collective aggregation, batch evaluation effects, and recommendation systems—yielding optimization principles for engineering human decision systems.
+The integration gap, then, is structural. Each tradition handles one piece. None takes seriously that real selection processes run across multiple stages with heterogeneous evaluator pools whose biases correlate, that observable features systematically distort perception, and that the architectural choices (batch size, committee composition, stage sequence, threshold rules) are the actionable design surface. LENS treats these together because, mathematically, they are part of the same system.
 
 ---
 
 ## 3. The LENS Model
 
-The LENS (Layered Evaluation with Noise and Systematic-bias) framework provides a mathematical foundation for understanding and optimizing multi-stage human selection systems. By explicitly decomposing evaluation errors into systematic biases and random noise—without requiring distributional assumptions—LENS enables principled design of selection architectures.
+The model develops in three steps. We start from the simplest plausible perception equation, identify its failure mode, and rewrite it in a form that captures multi-stage compounding correctly.
 
-### 3.1 Notation and Setup
+### 3.1 Why the Simple Error Model Is Not Enough
 
-Consider a selection system where evaluators assess candidates based on observable features. Each candidate possesses an intrinsic success probability that evaluators attempt to estimate, but their perceptions are distorted by both systematic biases and random factors.
+The natural first attempt at modeling perception error is additive on the probability scale: $\hat q_i = q_i + \delta_i$, with $E[\delta] = 0$ across evaluators. This is the implicit model behind Galton's ox-weight result. It works well for one-shot estimation problems where the only thing the modeler needs to capture is that individual estimates are noisy and average out to the truth.
 
-Let i index candidates and j index evaluators. We define:
+It does not work well for multi-stage selection systems for two reasons. First, the equation assumes errors cancel under averaging — but Kahneman, Sibony & Sunstein document that systematic differences across evaluators persist no matter how many evaluators you aggregate. Second, $\hat q_i = q_i + \delta_i$ does not respect the bounded scale: probabilities live in $[0, 1]$, and adding a noise term to a probability near the boundary produces estimates that may exceed one or fall below zero. The model needs a transformation that keeps perception bounded and that captures the multiplicative way biases compound across stages.
 
-**Ground truth (unobservable):**
+### 3.2 The Decomposition
 
-* q_i: True success probability of candidate i
+We separate the error into a systematic component (correlated with the candidate's observable features) and a random component (independent of features). Conditional on $x$, the law of total expectation gives
 
-**Observable features:**
+$$\delta_i = E[\delta_i \mid x_i] + (\delta_i - E[\delta_i \mid x_i]).$$
 
-* x_i: Feature vector visible to evaluators (e.g., pitch quality, credentials)
+The right-hand side is decomposed exactly: by construction, the second term has zero conditional mean given $x$. We approximate the first term with its best linear predictor, $E[\delta_i \mid x_i] \approx \beta^\top x_i$, where $\beta$ minimizes $E[(\delta_i - \beta^\top x_i)^2]$ over the candidate population. This yields
 
-**Evaluator parameters:**
+$$\delta_i = \beta^\top x_i + \varepsilon_i,$$
 
-* β_j: Evaluator j's systematic bias coefficients
-* σ²_ε,j: Variance function for evaluator j's noise (potentially heteroskedastic)
+where $\varepsilon_i$ is the residual random component with $E[\varepsilon_i \mid x_i] = 0$ by construction. The decomposition is general: any nonlinearity or interaction not captured by the linear form gets absorbed into $\varepsilon_i$, and we permit $\mathrm{Var}(\varepsilon_i \mid x_i)$ to vary with $x_i$ (heteroskedasticity). What it gives us is a clean separation of the *predictable* component of error (driven by features) from the *unpredictable* component (random across evaluation occasions).
 
-**Perception:**
+The interpretation of $\beta$ is over- or under-reaction relative to true predictive value. If $\beta_{j, \mathrm{pitch}} > 0$, evaluator $j$ overweights pitch quality beyond what it actually predicts about success — pitch is a feature, but the true relationship between pitch and success is already absorbed into $q_i$, so $\beta_{j, \mathrm{pitch}}$ captures only the deviation. This is what makes $\beta$ identifiable: we are not estimating the relationship between pitch and success (which mixes feature predictiveness and bias), we are estimating the deviation from accurate weighting.
 
-* q̂_ij: Evaluator j's estimate of candidate i's success probability
+### 3.3 The Logit Transformation
 
-### 3.2 Why Simple Error Models Fail
+The additive model on the probability scale violates probability bounds and does not capture compounding correctly. Following the generalized linear model framework (McCullagh & Nelder, 1989), we work in log-odds space:
 
-The natural starting point for modeling perception error is:
+$$\mathrm{logit}(\hat q) = \mathrm{logit}(q) + \beta^\top x + \varepsilon, \qquad \mathrm{logit}(p) = \log\frac{p}{1-p}.$$
 
-q̂_i = q_i + δ_i
+This transformation does three things. First, $\hat q$ stays in $[0, 1]$ regardless of how large $\beta^\top x + \varepsilon$ becomes — the inverse logit (sigmoid) is bounded. Second, biases compound multiplicatively across stages rather than additively, which matches the empirical observation that homophily and prestige effects accumulate exponentially through interview chains. Third, the orthogonality condition $E[\beta^\top x \cdot \varepsilon] = 0$ carries through the transformation, which means the decomposition into systematic and random components remains identified after the transformation.
 
-To proceed, we normalize evaluator scores so that the grand mean error equals zero: E[δ_i] = 0. This is a scaling choice, not an empirical claim that evaluators are unbiased—any systematic tendency to over- or under-rate candidates can be absorbed into the intercept without loss of generality.
+The map between the LENS components and the noise taxonomy of Kahneman, Sibony & Sunstein (2021) is direct: their level noise corresponds to between-evaluator variance in the intercept of $\beta_j$; their pattern noise corresponds to between-evaluator variance in the feature loadings of $\beta_j$; their occasion noise corresponds to within-evaluator variance in $\varepsilon_{ij} \mid x_i$. The diagnostic and the engineering vocabulary are the same vocabulary; LENS adds the engineering moves.
 
-This simple model underlies Galton's 1907 ox-weight experiment, where 787 fairgoers' median estimate proved remarkably accurate. However, we must distinguish between cross-sectional and longitudinal error distributions. The bell-shaped distribution of Galton's crowd arose from heterogeneous individual errors aggregated cross-sectionally. As noted in the statistical literature on aggregation [10], this tells us nothing about any individual's error distribution over repeated trials.
+### 3.4 From One Evaluator to a Committee
 
-More critically, equation (1) assumes errors cancel under averaging. Modern evidence contradicts this. Kahneman, Sibony, and Sunstein [4] document 55% premium variations among insurance underwriters evaluating identical cases—systematic patterns that persist despite aggregation. In venture capital, Brooks et al. [11] found identical pitches receive 70% higher ratings when voiced by men, demonstrating biases that averaging cannot eliminate.
+When $k$ evaluators form a committee and average their log-odds perceptions, the systematic and random components separate cleanly. The committee's perception is
 
-### 3.3 Decomposing Error: Systematic Plus Random Components
+$$\mathrm{logit}(\hat q_{\mathrm{committee}}) = \mathrm{logit}(q) + \bar\beta^\top x + \bar\varepsilon,$$
 
-To separate persistent biases from reducible noise, we apply the law of total expectation to decompose the error conditional on observable features:
+with $\bar\beta = \frac{1}{k} \sum_j \beta_j$ and $\bar\varepsilon = \frac{1}{k} \sum_j \varepsilon_j$. Under conditional independence of the noise terms, $\mathrm{Var}(\bar\varepsilon) = \sigma_\varepsilon^2 / k$ — the standard wisdom-of-crowds reduction. But the systematic average $\bar\beta$ converges to the population mean of evaluator biases. If all evaluators share a background that produces correlated bias toward, say, candidates from prestigious institutions, then $\bar\beta$ does not approach zero. The committee is more confident (lower variance) but no less biased (same expected $\bar\beta$). Precision without accuracy.
 
-δ_i = E[δ_i | x_i] + (δ_i - E[δ_i | x_i])
+This is where the architectural choice becomes load-bearing. Adding committee members reliably reduces random noise, which is the one thing committees were designed for. It does almost nothing to systematic bias unless the members are *bias-diverse* — which is to say, unless their $\beta$ vectors point in different directions. Demographic diversity is a proxy for bias diversity; it is sometimes the right proxy and sometimes not. The framework makes the distinction precise: the relevant quantity is $\rho_\beta$, the correlation of bias vectors across the committee, and the formula for residual systematic bias is
 
-By construction of conditional expectation, E[δ_i - E[δ_i | x_i] | x_i] = 0 — this is a mathematical identity, not a modeling assumption [12].
+$$\mathrm{Var}(\bar\beta) = \sigma_\beta^2 \left[ \rho_\beta + \frac{1 - \rho_\beta}{k} \right].$$
 
-For tractability, we approximate the systematic component with its best linear predictor:
-
-E[δ_i | x_i] ≈ β^T x_i
-
-where β minimizes E[(δ_i - β^T x_i)²]. This yields:
-
-δ_i = β^T x_i + ε_i
-
-where ε_i represents the residual random component with E[ε_i | x_i] = 0.
-
-**Important caveats:**
-
-* **Nonlinear structure**: Any curvature or interactions not captured by the linear form appear in ε_i
-* **Omitted variables**: The decomposition is relative to included features
-* **Heteroskedasticity**: We allow Var(ε_i | x_i) to vary with x_i
-
-### 3.4 Interpretation: Over/Under-reaction to Features
-
-The coefficients β capture how evaluator j systematically over- or under-reacts to observable features relative to their true predictive value (already embedded in q_i):
-
-* If β_j,pitch > 0: Evaluator j overweights pitch quality beyond its true importance
-* If β_j,credentials < 0: Evaluator j underweights elite credentials relative to actual predictive value
-* If β_j,k = 0: Evaluator j correctly calibrates feature k's importance
-
-This interpretation avoids double-counting: the true relationship between features and success is captured in q_i, while β represents only the deviation from accurate weighting.
-
-### 3.5 The Logit Transformation for Bounded Outcomes
-
-The linear model q̂ = q + β^T x + ε can violate probability bounds [0,1]. Following the generalized linear model framework [14], we work in log-odds space:
-
-**logit(q̂) = logit(q) + β^T x + ε**
-
-where logit(p) = log(p/(1-p)). The orthogonality principle ensuring E[β^T x · ε] = 0 carries through the transformation [15].
-
-This transformation has three advantages:
-
-1. **Bounded probabilities**: Ensures q̂ ∈ [0,1] regardless of β^T x + ε values
-2. **Multiplicative compounding**: Captures how biases multiply through stages rather than add
-3. **Empirical realism**: Pitch quality can inflate weak startups' scores AND deflate strong ones [Huang & Pearce 2015]
-
-### 3.6 Connection to Noise Taxonomy
-
-Our decomposition maps directly to the noise taxonomy introduced by Kahneman, Sibony, and Sunstein [4]:
-
-| Noise Type | Description | LENS Component |
-| ----- | ----- | ----- |
-| Level noise | Different evaluators have different average judgment levels (some harsh, others lenient) | Between-evaluator variance in intercepts: Var(β_j,0) |
-| Pattern noise | Evaluators disagree on which features matter and how much | Between-evaluator variance in slopes: Var(β_j,k) |
-| Occasion noise | The same evaluator gives different scores to the same candidate at different times | Within-evaluator inconsistency: Var(ε_ij | x_i) |
-
-This mapping shows how LENS provides a precise mathematical foundation for the qualitative concepts in the noise literature, enabling quantification and optimization rather than just diagnosis.
-
-### 3.7 From Individual to Collective Decisions
-
-When k evaluators form a committee, averaging their log-odds perceptions:
-
-logit(q̂_committee,i) = (1/k) Σ_j [logit(q_i) + β_j^T x_i + ε_ij] = logit(q_i) + β̄^T x_i + ε̄_i
-
-The noise component's variance decreases through averaging:
-
-Var(ε̄_i) = (1/k²) Σ_j Var(ε_ij) + (2/k²) Σ_{j<j'} Cov(ε_ij, ε_ij')
-
-Under conditional independence: Var(ε̄_i) = σ²_ε / k
-
-However, the systematic component:
-
-β̄ = (1/k) Σ_j β_j
-
-converges to the population mean bias vector. If evaluators share backgrounds, β̄ ≈ β_common, providing no bias reduction.
-
-This reveals a critical insight: **While adding committee members always reduces random noise (by a factor of 1/√k), it does nothing to reduce systematic biases when committee members share similar backgrounds, training, or perspectives.**
-
-### 3.8 Design Implications
-
-LENS reveals three paths to better selection:
-
-1. **Reduce occasion noise through structured evaluation**: Use standardized scoring rubrics, conduct evaluations at consistent times, and avoid decision fatigue [4].
-
-2. **Increase committee size for random error reduction**: Adding evaluators reduces random error by 1/√k, though with diminishing returns.
-
-3. **Ensure "genuinely diverse" evaluators for bias reduction**: The highest-impact intervention is ensuring low correlation of bias vectors: ρ_β ≈ 0. Crucially, evaluators must maintain independent perspectives at the time of decision-making. Research on groupthink [Janis 1972] and homophily [McPherson et al. 2001] shows that even teams starting with diverse backgrounds can develop correlated biases through prolonged interaction.
+When $\rho_\beta \approx 0$, the committee size $k$ does the work that the wisdom-of-crowds intuition says it should. When $\rho_\beta \approx 1$, committee size does nothing and the bias persists. The effective committee size for bias reduction is $k_{\mathrm{eff}} \approx 1 / (1 - \rho_\beta)$, which means a panel of twelve members with high bias correlation is operationally a panel of two or three.
 
 ---
 
-## 4. Analytical Properties
+## 4. Theorems and Design Rules
 
-The LENS framework reveals fundamental properties that explain why certain selection architectures consistently outperform others. By analyzing how different designs interact with human biases and noise, we derive principles for optimal system construction.
+The model produces three results that anchor the rest of the paper. They are the load-bearing claims; everything in §5 derives from them, and the calibration in §6 estimates the parameters they take as inputs.
 
-### 4.1 Batch Evaluation Superiority
+**Theorem 1 (Batch evaluation superiority).** *Consider selecting $k$ candidates from $n$ where perception errors $\varepsilon_i$ are independent with variance $\sigma_\varepsilon^2$. Batch evaluation — ranking candidates by perceived quality and selecting the top $k$ — achieves expected quality advantage over sequential evaluation (accepting the first $k$ candidates exceeding a fixed threshold) of approximately*
 
-**Theorem 1 (Batch Evaluation Advantage):** Consider selecting k candidates from n where perception errors ε_i are independent with variance σ²_ε. Batch evaluation (ranking candidates by perceived quality) achieves expected quality advantage over sequential evaluation (accepting first k candidates exceeding threshold) of approximately:
+$$E[\Delta_{\mathrm{quality}}] \approx \sigma_\varepsilon \cdot \left[\Phi^{-1}\!\left(\frac{n-k+1}{n+1}\right) - \Phi^{-1}\!\left(\frac{k}{n}\right)\right],$$
 
-**E[Δ quality] ≈ σ_ε × [Φ^(-1)((n-k+1)/(n+1)) - Φ^(-1)(k/n)]**
+*where $\Phi^{-1}$ is the inverse standard normal CDF.* The intuition is that batch evaluation lets the order statistic do work the threshold cannot: when comparison information is available, the top-$k$ candidates of a noisy ranking are systematically better than the first $k$ candidates that exceed a noisy threshold, because thresholding cannot benefit from the among-survivors comparison. For selecting the top 2% of candidates, the batch advantage is roughly $0.9 \sigma_\varepsilon$ in log-odds, which translates into substantial true-quality improvement.
 
-where Φ^(-1) is the inverse standard normal CDF.
+**Theorem 2 (Committee aggregation under correlated bias).** *For committee size $k$ with bias correlation $\rho_\beta$ and noise correlation $\rho_\varepsilon$,*
 
-**Interpretation:**
+$$\mathrm{Var}(\bar\beta) = \sigma_\beta^2 \left[\rho_\beta + \frac{1-\rho_\beta}{k}\right], \qquad \mathrm{Var}(\bar\varepsilon) = \sigma_\varepsilon^2 \left[\rho_\varepsilon + \frac{1-\rho_\varepsilon}{k}\right].$$
 
-* For selecting top 20% (k/n = 0.2), batch advantage ≈ 0.4σ_ε
-* For selecting top 2% (k/n = 0.02), batch advantage ≈ 0.9σ_ε
-* Advantage increases with selectivity (lower k/n) and evaluation noise (higher σ_ε)
+This is the formal version of the committee paradox: random noise drops as expected with committee size, but systematic bias is bounded below by $\sigma_\beta^2 \rho_\beta$ regardless of how many members you add. The result is standard variance algebra; what makes it load-bearing for design is that it gives the architect a target — measure $\rho_\beta$ in your evaluator pool and decide whether adding members is doing what you think it is doing.
 
-**Proof sketch:** Sequential evaluation selects candidates where logit(q) + ε > threshold. Due to threshold drift (σ_drift ≈ 0.3-0.5), the effective threshold varies. Batch evaluation selects candidates with highest logit(q) + ε values, leveraging order statistics. The difference in expected true quality E[logit(q)|selected] drives the advantage. Full proof in Appendix A.1.
+**Theorem 3 (Winner's curse in competitive selection).** *Under zero mean bias ($E[\beta^\top x] = 0$) and independent noise $\varepsilon_i \sim \mathcal N(0, \sigma_\varepsilon^2)$, the expected overestimation of the winning bidder in $N$-way competition satisfies*
 
-### 4.2 Committee Aggregation Under Correlated Bias
+$$E[\varepsilon_{\mathrm{winner}}] \approx \sigma_\varepsilon \cdot \Phi^{-1}\!\left(\frac{N}{N+1}\right) \approx \sigma_\varepsilon \sqrt{2 \log N}.$$
 
-**Theorem 2 (Committee Aggregation):** For committee size k with bias correlation ρ_β and noise correlation ρ_ε:
+For two competitors the overestimation is roughly $0.56 \sigma_\varepsilon$; for ten competitors, $1.54 \sigma_\varepsilon$; for fifty, $2.25 \sigma_\varepsilon$. This is structural: it does not require any of the bidders to be biased, only that they have any noise at all. Competitive selection mechanically picks the bidder furthest above the mean. The intuitive reading is that any bidder who *wins* in a competitive process should discount their own valuation by the expected order-statistic of their noise distribution before treating their bid as fair value.
 
-**Var(β̄) = σ²_β × [ρ_β + (1-ρ_β)/k]**
+A fourth result, less central but useful in design, is that for a two-stage system with evaluation costs $C_1, C_2$ where $C_2 \gg C_1$, the optimal advancement rate is approximately $s \approx \sqrt{C_1 / C_2}$. If late-stage evaluation costs a hundred times more than early-stage, advance roughly ten percent of candidates from the early stage. The square-root form comes from balancing type-I error costs (rejecting good candidates early) against type-II error costs (wasting expensive evaluation on weak candidates).
 
-**Var(ε̄) = σ²_ε × [ρ_ε + (1-ρ_ε)/k]**
-
-**Interpretation:**
-
-* **Random noise** (ρ_ε ≈ 0-0.2): Strong 1/k reduction, committee size helps substantially
-* **Systematic bias** (ρ_β ≈ 0.7-0.9): Weak reduction, adding members provides minimal benefit
-* **Key insight**: Effective committee size for bias reduction is: k_eff ≈ 1/(1-ρ_β)
-
-**Example:** If ρ_β = 0.9, then k_eff ≈ 10, meaning committees larger than 10 provide negligible additional bias reduction regardless of actual size.
-
-**Proof:** Standard variance formula for correlated variables. See Appendix A.2.
-
-### 4.3 Winner's Curse in Competitive Selection
-
-**Theorem 3 (Winner's Curse):** Under zero mean bias (E[β^T x] = 0) and independent noise ε_i ~ N(0, σ²_ε), the expected overestimation of the winning bidder in N-way competition satisfies:
-
-**E[ε_winner] ≈ σ_ε × Φ^(-1)(N/(N+1))**
-
-**Interpretation:**
-
-* N=2 competitors: E[ε_winner] ≈ 0.56σ_ε
-* N=10 competitors: E[ε_winner] ≈ 1.54σ_ε
-* N=50 competitors: E[ε_winner] ≈ 2.25σ_ε
-* Overestimation grows approximately as σ_ε√(2 log N)
-
-**Proof:** Direct application of order statistics for the maximum of N independent normal draws. See Appendix A.3.
-
-### 4.4 Stage Sequencing Heuristic
-
-For two-stage system with evaluation costs C₁, C₂ where C₂ >> C₁, optimal survival rate approximately:
-
-*s ≈ √(C₁/C₂)**
-
-**Example:** If final interviews cost 100× phone screens, advance ~10% of candidates (√(1/100) = 0.1).
-
-**Intuition:** Balance between rejecting good candidates early (type I error cost) and wasting expensive evaluation on weak candidates (type II error cost). The square root relationship emerges from equating marginal costs at the optimum.
-
-Note: Appendix B provides comprehensive treatment incorporating AUC, recall constraints, and bias-noise interactions.
-
-### 4.5 Universal Design Rules
-
-**RULE 1: Use batch evaluation when comparison information is cheap** → Enables ranking; reduces both bias and noise via order statistics
-
-**RULE 2: Sequence stages by information cost ratio** → Cheap filters first (phone screens, automated tests) → Expensive evaluation for finalists (on-sites, due diligence)
-
-**RULE 3: Diversify evaluator biases, not just demographics**
- → Low ρ_β is what matters for bias reduction → Measure: do committee members' ratings correlate? High ρ → low effective diversity
-
-**RULE 4: Never allow single-evaluator vetoes in early stages** → Individual biases compound multiplicatively through stages → Sequential processes amplify outlier judgments
-
-**RULE 5: Measure and correct for systematic biases** → Track survival rates by observable features → If Chinese candidates advance at 2× rate, bias exists regardless of intent → Adjust thresholds or implement countervailing biases
-
-**RULE 6: Reserve strategic capacity for contrarian picks** → High-bias opportunities may be high-quality → Allocate 20-30% of resources to explicitly contrarian selections
-
-**RULE 7: Calibrate thresholds to base rates** → log-odds threshold ≈ log(base_rate/(1-base_rate)) + adjustment for selection rate → Prevents systematic over/under-selection relative to true quality distribution
+The design rules these theorems imply are straightforward and largely intuitive once stated, but each is a place where current practice routinely gets it wrong: use batch evaluation when comparison is cheap; sequence stages by information cost ratio (cheap filters first, expensive evaluation for finalists); diversify the *biases* in your evaluator pool, not just the demographics; never let single evaluators veto candidates in early stages; calibrate thresholds to base rates; reserve a strategic fraction of capacity for explicitly contrarian selection. Each of these comes out of the framework as a formal consequence rather than as practitioner heuristic.
 
 ---
 
-## 5. Phenomena Explained: Theory Meets Practice
+## 5. The Phenomena, Derived
 
-This section demonstrates how LENS explains puzzling real-world patterns through systematic mathematical analysis. Each phenomenon receives detailed treatment: what practitioners observe, why it happens (mathematical intuition), what LENS predicts (testable hypotheses), design implications (actionable guidance), and failure modes (boundary conditions).
+Practitioners across domains have named the phenomena LENS explains. None of the names is wrong. What was missing was the recognition that they are consequences of the same underlying model. We walk through them in this section, noting which theorem from §4 each derives from, and pointing out where current folk-explanations get the mechanism right and where they get it wrong.
 
-### 5.1 Phenomenon 1: Winner's Curse in Competitive Selection
+The **winner's curse** is the cleanest case. A startup pitches to ten venture firms; three offer term sheets; the founder accepts the highest offer; the deal underperforms. The folk explanation is that the winning firm got too excited. The structural explanation is Theorem 3: when ten evaluators with independent noise each estimate the same true quality, the highest estimate is mechanically the largest positive deviation, and it is on average $1.54 \sigma_\varepsilon$ above the true value. For an evaluator with noise standard deviation $\sigma_\varepsilon = 0.5$ in log-odds units and a true success probability of twelve percent, the winning firm's perceived probability is around twenty-three percent — almost double the true value. The folk explanation locates the failure in the firm's discipline; the structural explanation locates it in the architecture of the bidding process. Discipline cannot fix order statistics. The only fix is to discount the winning bid by the expected order-statistic correction, or to reduce competition (which sellers do not want), or to share the deal across multiple winners, which averages instead of maximizing the noise.
 
-#### What Practitioners Observe
+The **contrarian advantage** comes from the asymmetric quality bar bias imposes. When group consensus creates a positive bias toward consensus startups ($\beta_{\mathrm{consensus}} > 0$) and a negative bias against contrarian ones ($\beta_{\mathrm{contrarian}} < 0$), the funding threshold $\mathrm{logit}(\hat q) > -4.6$ requires the contrarian startup to clear a higher bar of true quality. If $\beta_{\mathrm{consensus}} = +0.7$ and $\beta_{\mathrm{contrarian}} = -0.7$, contrarian startups must be roughly four times more likely to succeed to receive the same evaluation. The portfolio-level consequence is that contrarian portfolios, conditional on being funded, have systematically higher true quality than consensus portfolios. The folk explanation that contrarian investors are smarter than consensus investors is not necessarily wrong — but it is not what is doing the work. What is doing the work is that the bias creates a higher-quality filter on contrarian deal flow. Kerr, Lerner & Schoar (2014) document above-average reported returns in contrarian angel financings consistent with this mechanism.
 
-A promising startup pitches to 10 venture firms over a two-month fundraising process. Three firms make offers with varying valuations and terms. The founder, naturally excited and seeking validation, accepts the highest valuation—15% higher than the second-best offer. The winning VC celebrates internally: "We beat Sequoia and a16z for this deal!"
+The **homogeneity trap** is the case where multiplicative compounding through stages creates outcomes nobody intended. A small per-stage bias toward candidates from a shared background — perhaps $\beta_{\mathrm{shared}} = +0.2$ in log-odds, an effect so small no individual evaluator would identify it — accumulates across four interview stages to $+0.8$ in log-odds, which is $e^{0.8} \approx 2.2 \times$ multiplicative advantage. As the team's composition shifts toward the shared background, more interviewers share the bias, the per-stage $\beta$ effectively grows, and the system enters a runaway feedback loop where the next hire is even more likely to share the background than the last one. The folk explanation is unconscious bias on the part of individual interviewers, which is correct as a description but not as a target for intervention. Bias training reduces the per-stage $\beta$, but it does not address the multiplicative compounding through stages, which is the mechanism that turns small biases into large outcomes. McPherson, Smith-Lovin & Cook (2001) document homophily; the framework here adds why the small per-stage effects compound to large terminal effects. The architectural fix is to reduce the number of stages where the bias can compound (fewer interviews, more parallel evaluation) and to introduce stages with deliberately uncorrelated bias profiles (interviewers from different backgrounds making independent rather than sequential judgments).
 
-Two years later, the startup fails to achieve product-market fit and shuts down. The winning VC conducts a post-mortem and realizes they were 40% above fair value at entry. Their partners wonder: "Why do we keep losing money on deals we 'win' in competitive situations? Are we systematically overbidding?"
+The **batch evaluation advantage** is Theorem 1 made concrete. Y Combinator's Demo Day presents 200+ startups in a single event. Techstars runs cohort-based accelerators. Elite venture firms hold "batch office hours" reviewing 10–15 pitches per session. Even individual angel investors often wait to evaluate deals in monthly batches rather than one at a time. The folk reading of this pattern is logistical convenience. The structural reading is that batch evaluation lets the order statistic do work the threshold cannot. Sequential evaluation suffers from threshold drift (the evaluator's calibration varies with what they have just seen) and from comparison impossibility (without simultaneous comparison, the evaluator cannot tell whether this candidate is top-five-percent or top-fifteen). Batch evaluation eliminates both. The expected quality gain for selecting the top two candidates from ten is approximately $0.5 \sigma_\varepsilon$ in log-odds, which translates into a true-success-probability gain from roughly seven to twelve percent. The pattern is not about logistics; it is about the mechanics of selection under noise.
 
-This isn't isolated to venture capital. In M&A, winning bidders in auction processes systematically overpay relative to synergy value. In hiring, the candidate who receives 5 offers typically accepts the highest salary offer—and that company often overpaid relative to market. In grant competitions, programs that "barely" win funding frequently underdeliver relative to expectations.
+The **committee paradox** is Theorem 2 made concrete. An academic hiring committee expands from three to twelve members to increase the diversity of opinion. Despite quadrupling the committee size, the department continues to hire the same profile: theorists over systems researchers, candidates from prestigious institutions over equally qualified candidates from less prestigious ones. The folk reading is that the committee culture is "too strong" and needs more diverse membership. The structural reading is that variance reduction in $\bar\beta$ is bounded below by $\sigma_\beta^2 \rho_\beta$. If all twelve members share the same bias profile (same training, same sub-field, same prestige sensitivities), then $\rho_\beta \approx 0.9$, and the effective committee size for bias reduction is $k_{\mathrm{eff}} \approx 10$. Adding the eleventh and twelfth members buys nothing. Worse, the random-noise reduction from twelve members (down to roughly $0.29 \sigma_\varepsilon$ from individual $\sigma_\varepsilon$) makes the committee more confident in its biased choices. Precision without accuracy. The fix is to recruit committee members whose $\beta$ vectors point in different directions — practically, this means recruiting from different sub-fields, different career stages, different methodological traditions — not to keep adding members from the same population.
 
-#### Why It Happens (Mathematical Intuition)
+The **disproportionate power of recommendations** completes the catalog. A cold email to a top venture firm gets a one-to-two percent response rate. A warm introduction from a trusted operator gets fifty percent. Employee referrals are hired at three times the rate of job-board applicants. The folk reading is that recommendations signal trust, that humans favor people they know, that warm introductions are a heuristic for quality. The structural reading is that recommendations function as cost-free first-stage filters with biases aligned to the second-stage evaluator's biases. When a recommender pre-screens 200 candidates in their network and forwards 20 to an evaluator, this is operationally equivalent to inserting an unpaid Stage 0 in front of the evaluator's actual screening process, with $\beta_{\mathrm{recommender}} \approx \beta_{\mathrm{evaluator}}$ (the alignment is what makes the introduction warm). The efficiency gain is dramatic — 95–99% of screening cost eliminated — but the bias amplification is also dramatic. The recommender's network shares background and biases with the evaluator's network (homophily), so the recommendations amplify the same biases that drive the homogeneity trap. The efficiency of recommendation-driven hiring is precisely the mechanism by which it produces culturally uniform outcomes. There is no contradiction between the efficiency gain and the bias amplification; they are two sides of the same architectural property.
 
-The winner's curse is mathematically inevitable—not a failure of judgment but a consequence of the selection mechanism.
-
-Consider the simplest case: zero mean bias (E[β^T x] = 0) for all evaluators. Each evaluator forms their perception:
-
-logit(q̂_i) = logit(q) + ε_i
-
-Where ε_i ~ N(0, σ²_ε) represents random evaluation noise.
-
-The winner is whoever perceives highest quality: q̂_winner = max{q̂_1, ..., q̂_N}
-
-This mechanically selects for whoever made the biggest positive error: ε_winner = max{ε_1, ..., ε_N}
-
-**Order statistics** govern the expected maximum of N independent normal draws:
-
-E[ε_max] ≈ σ_ε × Φ^(-1)(N/(N+1))
-
-For N=10 competitors: Φ^(-1)(10/11) ≈ 1.54, therefore: E[ε_winner] ≈ 1.54 × σ_ε
-
-**Numerical example:**
-
-Assume:
-
-* True quality: logit(q_true) = -2, which implies q_true ≈ 12% success probability
-* Industry-standard evaluation noise: σ_ε = 0.5
-* Number of competing bidders: N = 10
-
-Expected winner's perception: logit(q̂_winner) = -2 + 1.54(0.5) = -2 + 0.77 = -1.23
-
-Converting back: q̂_winner ≈ 23%
-
-**The winning VC perceives ~23% success probability when true probability is ~12%—almost double!**
-
-At a $20M post-money valuation:
-
-* Fair value (12% probability): $2.4M expected outcome
-* Winner's perception (23% probability): $4.6M expected outcome
-* **Winner overpays by ~$2.2M in expected value terms**
-
-#### What LENS Predicts
-
-**Prediction 1:** Winner's overestimation increases with competition
-
-| Competitors (N) | E[ε_winner]/σ_ε | Overestimate for σ_ε=0.5 |
-| ----- | ----- | ----- |
-| 2 | 0.56 | 0.28 log-odds |
-| 5 | 1.16 | 0.58 log-odds |
-| 10 | 1.54 | 0.77 log-odds |
-| 20 | 1.87 | 0.94 log-odds |
-| 50 | 2.25 | 1.13 log-odds |
-
-**Empirical test:** Deals with 5+ competing term sheets should underperform deals with 1-2 offers by ~20-40 basis points in IRR.
-
-**Prediction 2:** Noisier evaluators face larger winner's curse. Junior investors (higher σ_ε) should show larger effects than experienced partners.
-
-**Prediction 3:** Second-place bidders also overpaid (just less). For N=10: E[ε_second] ≈ 1.34σ_ε vs E[ε_winner] ≈ 1.54σ_ε.
-
-**Prediction 4:** Winner's curse persists even with perfectly unbiased evaluators (E[β]=0). It's structural to competitive selection.
-
-#### Design Implications
-
-**For investors:**
-
-1. Model the winner's curse explicitly: discount your winning bid by E[ε_max] ≈ 1.5σ_ε
-2. Don't anchor on pre-term-sheet excitement—conduct extra diligence searching for disconfirming evidence
-3. Track hit rate by competition level: if competitive wins underperform proprietary deals, adjust
-4. Collaborative consortia reduce curse severity (multiple winners share → average of errors replaces maximum)
-
-**For sellers:**
-
-1. Engineer competition deliberately: 10+ bidders → larger curse works in your favor
-2. Push for quick close after generating competing interest
-3. Don't necessarily accept highest offer if it's from known high-σ_ε evaluator
-
-#### Failure Modes
-
-**When winner's curse doesn't apply:**
-
-1. **Private information** (not just noise): Strategic acquirer with proprietary synergy knowledge vs financial buyers
-2. **Strategic underbidding**: Sophisticated evaluators who model the curse may bid below estimate
-3. **Private value assets**: Personal preference matters more than common objective value
+These six phenomena are not the full set. The framework also explains, more briefly: why prestige effects compound across academic generations; why interview rubrics are weaker than they look (they shrink $\sigma_\beta$ but rarely change $\rho_\beta$); why "blind review" mitigates pattern noise but not level noise; why the optimal investment portfolio under bias is more diversified than it looks under unbiased portfolio theory. We discuss each briefly in the appendix that accompanies the journal version. The pattern across all of them is the same: a phenomenon that current practice treats as either inevitable or as a personal failing turns out to be a derivable consequence of the architecture, and the architecture is something a designer can change.
 
 ---
 
-### 5.2 Phenomenon 2: The Contrarian Advantage
+## 6. Calibration
 
-#### What Practitioners Observe
+The framework is only as useful as its parameters are estimable. This section calibrates $\beta$ and the residual noise on a real expert panel — a partial calibration, by design — to demonstrate the parameters are recoverable from data the kind of organization that actually runs these processes already collects.
 
-The venture capital industry exhibits persistent patterns in sector preference. In 2021-2022, everyone wanted to fund generative AI applications, crypto infrastructure, and web3 platforms. Consensus wisdom said deep tech takes too long (10-15 year horizons), hardware has terrible margins (requires manufacturing scale), and enterprise infrastructure is boring (slow sales cycles).
+### 6.1 Data and Approach
 
-A contrarian VC ignores this consensus, investing in fusion energy, novel semiconductor architectures, and database infrastructure. Five years later, the contrarian portfolio generates 4-5× returns while consensus AI application companies have mostly failed.
+The calibration uses N = 35 startups evaluated by the Cyrannus expert panel during a single round, with at least ten independent reviewers per startup. The dependent variable is the committee mean score on a 1–5 scale, which serves as a high-reliability outcome that isolates systematic effects from idiosyncratic individual noise. The committee aggregation is itself useful diagnostically: averaging ten independent evaluators reduces the random component of error by roughly $\sqrt{10} \approx 3.2$, so any systematic effect that survives the averaging is, by construction, not random noise.
 
-Why do contrarian bets systematically outperform consensus picks?
+The features available to the model are merit (a substantive measure derived from the panel's assessment of business quality, traction, team capability) and delivery (a presentational measure derived from the panel's assessment of pitch quality, clarity, polish). These two features were chosen because they correspond to the operational distinction Cyrannus uses internally between *startup quality* (what the business will be worth) and *pitch quality* (how well the founder presented it). Both features were normalized to the unit interval before estimation to make the resulting $\beta$ values directly comparable.
 
-#### Why It Happens (Mathematical Intuition)
+We estimate two specifications. The first regresses committee mean on merit alone, which by construction yields $\beta_{\mathrm{merit}} = 1.0$ — merit is the primary predictor and the regression coefficient absorbs the entire scale. The second regresses on merit and delivery jointly, which is the specification of interest: it asks how much delivery influences perceived quality *over and above* what merit predicts. If LENS is right that delivery operates as a systematic feature bias, $\beta_{\mathrm{delivery}}$ should be positive and statistically significant.
 
-The contrarian advantage emerges from **asymmetric quality requirements imposed by bias**.
+### 6.2 Results
 
-When group consensus creates systematic bias, the funding threshold becomes:
+The joint regression yields $\beta_{\mathrm{merit}} = 0.79$ (SE = 0.097, p < 0.001) and $\beta_{\mathrm{delivery}} = 0.297$ (SE = 0.097, p = 0.004). The adjusted $R^2$ is 0.76; the regression standard error is 0.89. The point estimates, the significance, and the model fit all support the framework's prediction that delivery operates as a positive systematic bias on perceived quality even after controlling for merit.
 
-logit(q̂) = logit(q) + β^T x > threshold_funding
+The merit coefficient of 0.79 represents a systematic attenuation: relative to its predictive role when delivery is omitted ($\beta_{\mathrm{merit}} = 1.0$ in the merit-only specification), merit is roughly 21% under-weighted by the panel when delivery is in the prediction set. The delivery coefficient of 0.297 represents the incremental influence of presentation on perceived quality. In log-odds units, these are economically meaningful effects: a one-standard-deviation improvement in delivery shifts perceived quality by approximately 0.3 log-odds units, which translates into a meaningful change in funding probability for candidates near the threshold.
 
-Rearranging: logit(q) > threshold_funding - β^T x
+The robustness checks tell the same story. A 1,000-replication bootstrap places the 95% confidence interval for $\beta_{\mathrm{delivery}}$ at $[0.11, 0.48]$ — well above zero. Five-fold cross-validation gives an out-of-sample $R^2$ of 0.72, indicating the model generalizes within this sample. A permutation test that shuffles delivery scores produces $p = 0.002$, ruling out the possibility that the delivery effect is a spurious correlation. Variance inflation factors are all below 1.5, ruling out multicollinearity between merit and delivery as a concern.
 
-For **consensus startups** (positive group bias β_consensus = +0.7):
+### 6.3 What the Numbers Mean
 
-* Required true quality: logit(q) > -4.6 - 0.7 = -5.3
-* In probability: q > 0.5%
+The headline finding is that the delivery effect ($\beta_{\mathrm{delivery}} = 0.297$) survives ten-fold averaging across an independent expert panel. This is the framework's central diagnostic prediction. If delivery were noise — if individual evaluators' susceptibility to pitch quality were random across evaluators — then averaging across ten reviewers should have driven the coefficient toward zero, the way wisdom-of-crowds aggregation drives random errors toward zero. It did not. The delivery effect is a *correlated* bias: most evaluators on the panel weight delivery in the same direction, so the averaging cannot wash it out. This is exactly Theorem 2's prediction — random noise reduces with committee size, systematic bias does not.
 
-For **contrarian startups** (negative bias β_contrarian = -0.7):
+The merit attenuation ($\beta_{\mathrm{merit}} = 0.79$ instead of 1.0) is consistent with the same diagnosis. When delivery is added to the model, it absorbs roughly 21% of the variance previously attributed to merit. The most plausible interpretation is that some fraction of what the panel perceives as merit is actually being driven by delivery — a candidate with strong delivery is rated as having stronger merit even after controlling for their actual underlying quality. This is the classic confound the framework predicts: an observable feature (delivery) systematically distorts perceptions of an unobservable quality (merit), and the distortion persists across the panel because the panel members share the bias.
 
-* Required true quality: logit(q) > -4.6 - (-0.7) = -3.9
-* In probability: q > 2.0%
+### 6.4 Limitations and What Reproduces from Public Data
 
-**The contrarian startup must be 4× more likely to succeed to receive the same treatment!**
+The calibration above used per-rater human judgments of merit and delivery — the kind of granular score data Cyrannus collects internally during expert panels. That data is confidential and is not part of this paper's public release. The closest reproducible analog is a regression of committee mean expert score on AI-derived component scores (market potential, solution viability, team capability, initial traction), which can be run end-to-end against the anonymized data in [`code/data/startup_evaluations_avg_anon.csv`](../code/data/startup_evaluations_avg_anon.csv) using the script [`code/paper1_calibration/calibrate_beta.py`](../code/paper1_calibration/calibrate_beta.py).
 
-This creates systematic quality asymmetry:
+The public reproduction is a different specification — AI-component features rather than human merit/delivery — and so produces different $\beta$ values that should not be confused with the merit/delivery results above. What it does reproduce is the model fit ($R^2 = 0.745$ in the public version) and the qualitative pattern that the largest single coefficient is on the substantive feature (market potential) with smaller but non-trivial coefficients on the others. The journal version will include both calibrations side by side.
 
-* Portfolio of consensus investments: average q ≈ 0.5%
-* Portfolio of contrarian investments: average q ≈ 2.0%
+Beyond data access, the calibration has four limitations that bound how strongly the results should be read. Committee-aggregated outcomes mask individual-evaluator heterogeneity, so we cannot identify per-evaluator $\beta_j$ or measure $\rho_\beta$ directly from this data — that would require per-rater scores, which a properly designed follow-up could extract. The observational design prevents causal claims; we demonstrate association consistent with framework predictions, not causation. A single domain (startup evaluation) is a single test, and generalization to hiring, admissions, and grant review is the work of Papers 2 and 3 plus future replication studies. The interpretation of $\beta_{\mathrm{merit}} = 0.79$ as "21% attenuation" assumes merit and delivery are on comparable scales, which they are by construction in this specification but which would deserve sensitivity analysis in a journal-length presentation.
 
-**Numerical example:**
-
-Assume:
-
-* 1,000 AI startups (consensus hot) vs 1,000 deep tech startups (contrarian)
-* True quality identical: logit(q) ~ N(-4.0, 1.0) for both
-* Group bias: β_AI = +0.7, β_deeptech = -0.7
-* Funding threshold: logit(q̂) > -4.6
-
-**For AI startups:**
-
-* Perceived: logit(q̂_AI) = logit(q) + 0.7
-* To get funded: logit(q) > -5.3
-* Fraction funded: Φ((−4.6−(−4.0))/1.0 + 0.7) = Φ(1.1) ≈ 86%
-
-**For deep tech:**
-
-* Perceived: logit(q̂_deeptech) = logit(q) - 0.7
-* To get funded: logit(q) > -3.9
-* Fraction funded: Φ((−4.6−(−4.0))/1.0 - 0.7) = Φ(−1.3) ≈ 10%
-
-Average quality of funded startups:
-
-* AI portfolio: E[logit(q)|funded] ≈ -4.5
-* Deep tech portfolio: E[logit(q)|funded] ≈ -3.2
-
-**Contrarian portfolio is ~1.3 log-odds better ≈ 3.7× higher success probability!**
-
-#### What LENS Predicts
-
-**Prediction 1:** Contrarian outperformance scales with bias magnitude
-
-* If |β_contrarian| = 0.3: Advantage ≈ 0.6 log-odds (1.8× quality ratio)
-* If |β_contrarian| = 0.7: Advantage ≈ 1.4 log-odds (4.0× quality ratio)
-* If |β_contrarian| = 1.0: Advantage ≈ 2.0 log-odds (7.4× quality ratio)
-
-**Prediction 2:** Advantage concentrates in deals near threshold (those that barely passed)
-
-**Prediction 3:** Effect disappears if contrarian view becomes consensus (β shifts from negative to positive)
-
-**Prediction 4:** Contrarian investors need fewer deals for same returns (higher average quality)
-
-#### Design Implications
-
-**For investors:**
-
-1. **Track consensus vs contrarian positioning**: Measure how many other firms pursued each deal
-2. **Be contrarian on deals near your threshold**: Maximum advantage at 51% conviction when consensus is 20%
-3. **Reserve 20-30% for contrarian allocation**: Systematic capacity for non-consensus investments
-4. **Build proprietary signal in contrarian domains**: Your informational advantage is largest where consensus has least attention
-
-**For startups:**
-
-1. **Don't try to become consensus if you're contrarian**: You'll lose the quality advantage
-2. **Find investors with conviction in your space**: They'll give better terms (fewer alternatives)
-
-**For allocators (LPs):**
-
-1. **Value contrarian positioning in manager selection**: Ask "Which investments did top firms pass on?"
-2. **Beware performance chasing**: Today's hot sector is tomorrow's over-invested sector
-
-#### Failure Modes
-
-**When contrarian doesn't outperform:**
-
-1. **"No signal" contrarian** (β ≈ 0) vs true contrarian (β < 0): Dead sectors aren't contrarian, they're wrong
-2. **Contrarian for wrong reasons**: Conspiracy theories ≠ thoughtful non-consensus
-3. **Illiquid markets**: Contrarian might mean worse access, no exit opportunities
-4. **Skill mismatch**: Contrarian investing requires different capabilities than consensus pattern-matching
+What the calibration establishes, despite the limitations, is that the framework's parameters are estimable from the kind of evaluation data organizations already collect, and that the specific prediction LENS makes — systematic feature biases survive committee aggregation — holds in this dataset. The comprehensive parameter estimation across architectures and evaluator types is the work of Paper 2's simulation framework.
 
 ---
 
-### 5.3 Phenomenon 3: The Homogeneity Trap
+## 7. Boundary Conditions
 
-#### What Practitioners Observe
+The framework is not universally applicable. It targets a specific class of selection problems with specific structural properties, and it fails outside that class.
 
-A technology company is founded in 2019 with genuine commitment to diversity. The founding team includes 2 Chinese engineers. The company implements blind resume screening, structured interviews, diverse outreach, and unconscious bias training.
+LENS applies when multiple evaluators assess candidates on outcomes that admit a probability interpretation, when observable features systematically influence those judgments, when the architecture (committee structure, batch sizes, stage counts, threshold rules) is designable rather than fixed, and when outcomes are eventually observable for calibration. Hiring, venture investment, university admissions, and grant review fit cleanly. So do less obvious cases like clinical trial enrollment, judicial sentencing, and editorial decision-making at peer-reviewed journals.
 
-Three years later, engineering is 90% Chinese/Chinese-American. Nobody intended this outcome. Every individual hiring decision seemed meritocratic. Yet the aggregate result is extreme homogeneity.
+It applies less cleanly when evaluators strategically misreport their beliefs. The model assumes evaluators report their honest perception; if they vote strategically to manage committee dynamics or to manipulate the outcome, the formal results break down. Game-theoretic extensions exist in the social-choice literature; they are not part of LENS. It applies less cleanly when bias parameters shift on faster timescales than the estimation window — a venture market in which what investors consider "hot" changes monthly will produce non-stationary $\beta$ that the estimation cannot track. Dynamic Bayesian extensions are the natural fix and would constitute a sequel paper. It applies less cleanly when extreme selection rates push the analysis into tail behavior the linear approximation cannot capture; selecting the top 0.1% of candidates is a different mathematical problem than selecting the top 10%, and the Gaussian approximations underlying the order-statistic results in Theorems 1 and 3 break down when the tail thickness matters. Extreme value theory provides the right tools and they are not what this paper develops.
 
-#### Why It Happens (Mathematical Intuition)
+A second class of failure is identifiability. The framework is identified when there is variation in features across the candidate pool, when there are multiple evaluators per candidate (so $\beta$ and $\varepsilon$ can be separated), and when at least some outcomes are observable for parameter calibration. None of these conditions is exotic, but each fails in specific real-world settings. A single-evaluator process cannot separate systematic from random error; this is not a weakness of the framework, it is a fundamental limit of what can be inferred from one judgment. A candidate pool with no feature variation cannot identify $\beta$; this is a sample-design problem, fixable by including a sufficiently diverse pool. A process with no observable outcomes (because it is too new, or because outcomes are inherently subjective) limits the calibration to bias decomposition without ground truth.
 
-The homogeneity trap emerges from **sequential compounding of small, correlated biases**.
-
-Once you have Chinese engineers, Chinese candidates receive subtle positive evaluation bias from shared language, culture, and referral networks: β_chinese = +0.2 per interview stage.
-
-**This seems negligible!** But watch what happens with 4 sequential stages:
-
-Total accumulated bias: 4 × 0.2 = +0.8 log-odds
-
-In probability space:
-
-* Chinese candidate: logit(q̂) = logit(q) + 0.8
-* Non-Chinese: logit(q̂) = logit(q) + 0.0
-
-If true quality logit(q) = -1.5 for both:
-
-* Chinese: q̂ ≈ 33% overall pass rate
-* Non-Chinese: q̂ ≈ 18% overall pass rate
-
-**Chinese candidates are 1.83× more likely to pass despite identical ability!**
-
-Multiplicative advantage: e^0.8 ≈ 2.2×
-
-**The runaway feedback loop:**
-
-As team composition shifts, bias amplifies:
-
-| Year | Chinese % | β per stage | Cumulative advantage | New hires Chinese % |
-| ----- | ----- | ----- | ----- | ----- |
-| 1 | 20% | 0.20 | 2.2× | 60% |
-| 2 | 50% | 0.30 | 3.3× | 75% |
-| 3 | 65% | 0.35 | 4.1× | 85% |
-| 4 | 75% | 0.38 | 4.6× | 90%+ |
-
-The system accelerates toward homogeneity exponentially.
-
-**Mathematical formulation:**
-
-Let f(t) = fraction from dominant group at time t
-
-f(t+1) = f(t) + [hiring_advantage(f(t)) × (1 - f(t))]
-
-where β_dominant(f) = β_base + β_network × f
-
-This creates logistic growth with rapid acceleration around f=0.3-0.7.
-
-#### What LENS Predicts
-
-**Prediction 1:** Homophily compounds exponentially with stages
-
-Effect scales as: e^(β × n_stages × fraction_aligned)
-
-For β = 0.2:
-
-* 1 stage: 1.22× advantage
-* 2 stages: 1.49×
-* 4 stages: 2.23×
-* 8 stages: 4.95×
-
-**Prediction 2:** Critical threshold around 30-40% where runaway begins
-
-* Below 30%: Linear slow growth
-* 30-70%: Exponential acceleration
-* Above 70%: Saturation at stable homogeneous state
-
-**Prediction 3:** Early intervention exponentially more effective
-
-* Correcting at 20%: minimal effort
-* Correcting at 70%: requires massive intervention
-
-**Prediction 4:** Batch evaluation dampens the effect (direct comparison reduces bias)
-
-**Prediction 5:** Effect is symmetric—any initial advantage compounds (not specific to any group)
-
-#### Design Implications
-
-**For hiring managers:**
-
-1. **Use batch evaluation instead of sequential**:
-
- * Schedule 5-8 candidates in single interview day
- * Require comparative rankings: "A vs B for this role"
-2. **Mandate cross-group interview panels**:
-
- * Ensure every panel has < 50% from any single background
- * Need genuine diversity (different β), not demographic checkbox
-3. **Track survival rates by demographic at each stage**:
-
- * Calculate: P(pass stage i | background A) / P(pass stage i | background B)
- * If ratio > 1.3 or < 0.7, investigate
-4. **Intervene early and proactively**:
-
- * At 20-30% concentration, actively diversify
- * Waiting until 70% requires 5-10× more effort
-5. **Reduce number of interview stages**:
-
- * Every stage compounds bias: 4 stages = 4× amplification vs 2 stages
- * Minimum viable: phone screen + technical + team fit = 3 stages
-6. **Set explicit diversity targets with accountability**:
-
- * Not: "We aim for diversity" (aspirational, no effect)
- * But: "30% of offers to underrepresented OR explain to CEO" (accountability)
-
-**For diverse candidates:**
-
-1. Target organizations early in homogeneity curve (20-30% representation)
-2. Seek batch evaluation settings (harder for unconscious bias to operate)
-3. Build advocates inside (one champion can shift β across panels)
-
-#### Failure Modes
-
-**When homogeneity trap isn't operating:**
-
-1. **True skill clustering exists**: If group genuinely has systematic advantage in domain
-2. **Self-selection**: If company culture appeals more to certain groups (preferences, not bias)
-3. **Geographic constraints**: If local talent pool is homogeneous
-4. **Overcompensation creates reverse trap**: If β_underrepresented = +0.5 when β_dominant = +0.2, bias flips
-
-**Empirical signature of trap:**
-
-* Exponential acceleration (not linear)
-* Critical threshold ~30-40%
-* Survival ratios > 1.5× at later stages
-* Pattern persists DESPITE explicit diversity efforts
+The practical diagnostic for whether LENS applies in a particular setting is straightforward. Is the evaluation on a probability scale? Are the evaluators' biases systematic in the framework's sense — do similar candidates get rated similarly across evaluators in ways that correlate with observable features? Do outcomes eventually exist that allow calibration? Is the architecture actually designable, or is it institutionally fixed in ways that defeat the purpose? A "yes" to all four supports applying the framework. A "no" to any of them is a reason to either narrow the scope (calibrate what can be calibrated, design what can be designed) or to use a different framework entirely.
 
 ---
 
-### 5.4 Phenomenon 4: Why Startups Are Evaluated in Batches
+## 8. Research Agenda and Trilogy Position
 
-#### What Practitioners Observe
+This paper establishes the theoretical foundation and a demonstrative calibration. The two pieces missing for a complete picture — comprehensive validation of architectural predictions, and operational instantiation of those predictions in a working system — are the work of the companion papers.
 
-Y Combinator's Demo Day presents 200+ startups in 6 hours. Techstars runs cohort-based accelerators. Top VCs hold "batch office hours" reviewing 10-15 pitches per session. Even individual angels accumulate deals over a month for batch evaluation.
+Paper 2, *The Platform Paradox: When Angels with Architecture Outperform Elite VCs*, validates the framework through Monte Carlo simulation across eleven investor archetypes (solo angels, angel groups, accelerators, syndicates, general venture firms, elite venture firms, platform variants). Across 2,200 configurations spanning four candidate-quality tiers, three evaluator profiles, and multiple architectural variants, the simulation produces the central empirical finding the framework predicts: architecture matters more than individual evaluator skill. A platform-enabled angel achieves 3.91% portfolio quality, beating elite venture firms (3.51%) and individual angels (1.50%) by 160% — the gain comes from the multi-stage architecture (scout, AI filter, expert committee), not from the angel's enhanced ability. Paper 2 also introduces selection consistency (coefficient of variation across runs) as a third performance dimension alongside quality and scale, and shows platforms achieve six times better consistency than traditional venture architectures.
 
-This batching isn't just logistics—it's systematic across the entire ecosystem. Why?
+Paper 3, *Instruction Distillation for Startup Pitch Ranking*, instantiates the AI-filter component of Paper 2's platform architecture in a working system. A large language model, prompted with a methodology distilled from a ten-expert evaluation panel, ranks startup pitches in alignment with the panel at NDCG@20 = 0.923. The methodological contribution is *instruction distillation*: rather than asking experts to articulate their criteria, we have an LLM read pairs of (pitch, expert review) and reverse-engineer the implicit rubric. The architectural contribution is that the LLM is positioned as a first-stage filter, not as a replacement for human judgment, with the human expert as the final stage. The empirical NDCG numbers from Paper 3 feed back into Paper 2's sensitivity analysis as the realistic noise parameter for the AI-filter stage, closing the loop between the simulation predictions and the operational reality.
 
-#### Why It Happens (Mathematical Intuition)
+Beyond the trilogy, the natural extensions are along five axes. *Per-rater identification of $\beta_j$* requires data with sufficient evaluator-candidate cross-coverage that individual-evaluator bias profiles can be estimated separately from candidate-level effects, which the current calibration does not have. *Dynamic $\beta(t)$* would relax the static-bias assumption to allow tracking of how evaluators' biases drift across markets, time periods, or training interventions. *Architectural search* — formal optimization over the space of designable architectures (committee sizes, stage counts, threshold rules) given measured $\beta$ and $\sigma$ — is the engineering question this paper sets up but does not solve in closed form. *Cross-domain replication* of the calibration in domains beyond venture investment is the most important external-validity question, and the most tractable for follow-up work. *Strategic-evaluator extensions* into the game-theoretic regime where evaluators may misreport their beliefs is the formal-modeling extension that connects LENS to the social-choice literature.
 
-Sequential evaluation creates two critical problems:
-
-**Problem 1: Threshold Drift**
-
-Your internal quality bar shifts based on recent observations. After three weak pitches, average looks great. After a unicorn-quality founder, good seems mediocre.
-
-threshold_effective(t) = threshold_target + drift(recent_observations)
-
-Empirical studies quantify this:
-
-* Asylum judges: ±15 percentage points based on prior three cases
-* Loan officers: ±12 percentage points after streak of defaults
-* Baseball umpires: strike zone shifts 2-3 inches after recent calls
-
-In log-odds, drift can reach ±0.5:
-
-* If threshold_target = 30% perceived success
-* Drift shifts to 20% (too lenient) or 45% (too harsh)
-
-**Problem 2: Calibration Impossibility**
-
-Is this startup top 5% or top 15%? Without simultaneous comparison, you're evaluating against memory, not reality. Human memory:
-
-* Fades exponentially (50% accuracy drop after 1 week)
-* Distorts positively (remember great pitches better)
-* Lacks precision (remember "good" but not exact position)
-
-**How Batch Evaluation Solves Both:**
-
-1. **Ranking replaces thresholding**:
-
- * Sequential: "Is this above my bar?" (subject to drift)
- * Batch: "Is this better than the others?" (immune to drift)
-2. **Order statistics favor batch**:
-
-Even with evaluation noise σ_ε, selecting top k from n gives advantage.
-
-**Numerical example** (selecting 2 from 10):
-
-Assume:
-
-* True quality: logit(q) ~ N(-3.0, 1.0) [~5% mean success]
-* Evaluation noise: σ_ε = 0.5
-* Threshold drift: σ_drift = 0.4
-
-**Sequential:**
-
-* Target threshold: logit(q̂) > -2.5 [aiming for 7.6% success]
-* Threshold drifts: actual ranges -2.1 to -2.9
-* Expected quality selected: E[logit(q)] ≈ -2.7 → 6.3% success rate
-
-**Batch (top 2 of 10):**
-
-* Rank by perceived quality: logit(q̂_i) = logit(q_i) + ε_i
-* Select top 2 regardless of absolute scores
-* Expected quality: E[logit(q)|top 2] ≈ -2.2 → 10% success rate
-
-**Batch delivers ~0.5 log-odds better = 1.6× higher success probability!**
-
-The advantage comes from:
-
-* Eliminating threshold drift: ~0.2 log-odds
-* Order statistics: ~0.3 log-odds
-
-For selecting top 2 from 10:
-
-* Expected 9th highest error: σ_ε × 1.54 = +0.77
-* Expected 8th highest error: σ_ε × 1.16 = +0.58
-
-These positive errors ADD to true quality, systematically boosting selected candidates.
-
-#### What LENS Predicts
-
-**Prediction 1:** Batch advantage increases with noise
-
-* Low noise (σ_ε = 0.2): Advantage ≈ 0.3 log-odds
-* High noise (σ_ε = 0.7): Advantage ≈ 0.7 log-odds
-
-Junior investors gain MORE from batching than experienced partners.
-
-**Prediction 2:** Optimal batch size: 8-15 candidates
-
-* Too small (n=2-3): Limited order statistics advantage
-* Too large (n=50+): Exceeds working memory
-* Sweet spot: 10-12
-
-**Prediction 3:** Advantage largest for low selection rates
-
-* Top 20% (2 of 10): Moderate (~0.5 log-odds)
-* Top 2% (2 of 100): Large (~0.9 log-odds)
-* Top 0.5% (1 of 200): Massive (~1.2 log-odds)
-
-Why elite accelerators (YC: 1.5% acceptance) use batches religiously.
-
-**Prediction 4:** Effect compounds with multiple evaluators
-
-* Single evaluator batch: σ_ε reduction via order statistics
-* Committee batch: σ_ε/√k reduction PLUS order statistics
-
-Why YC has multiple partners evaluate entire batch together.
-
-#### Design Implications
-
-**For VCs:**
-
-1. **Batch your deal flow**: Accumulate 10-15 companies, schedule batch review
-2. **Structured sessions**: Each founder 20-min pitch + 10-min Q&A, rank order after all pitches
-3. **Track quality by mode**: Tag "batch" vs "sequential", measure realized returns
-4. **Use in IC meetings**: Present 3-5 deals simultaneously for relative ranking
-
-**For accelerators:**
-
-1. **Cohort model is mathematically optimal**: 200+ applications in batch enables 2% selectivity
-2. **Demo Days leverage investor batching**: Forces 100+ investors to evaluate simultaneously
-3. **Mid-program evaluations should batch**: Progress presentations for entire cohort
-
-**For startups:**
-
-1. **Target batch evaluation venues**: Apply to accelerators, seek VCs with batch office hours
-2. **Timing matters**: Request first or last slot (primacy/recency advantage), avoid middle
-3. **Don't be "only deal" in IC**: Being one of 5 compared is more favorable than sole discussion
-
-#### Failure Modes
-
-**When batch doesn't help:**
-
-1. **Strategic complementarity**: If portfolio fit matters (this SaaS complements our infrastructure), sequential allows fit assessment
-2. **Time-sensitive information**: If key signals arrive over weeks, batch loses timeliness
-3. **Batch exceeds working memory**: 50+ candidates → can't remember early ones
-4. **Anchor on batch average**: If batch is unusually weak, might pass decent opportunities
-5. **Correlated batch composition**: Batch of 10 AI startups → β_AI affects all similarly
-
-**Empirical boundaries:**
-
-Batch advantage largest when:
-
-* High noise (σ_ε > 0.4)
-* Low selection rates (k/n < 0.2)
-* Moderate batch size (8 < n < 15)
-* Diverse batch composition
-* Experienced facilitator
-
----
-
-### 5.5 Phenomenon 5: The Committee Paradox
-
-#### What Practitioners Observe
-
-A prestigious academic department recognizes hiring outcomes lack diversity. Faculty is 85% graduates of Harvard, MIT, Cambridge. To improve, they expand hiring committee from 3 to 12 members spanning different specializations, career stages, and backgrounds.
-
-Two years later, after hiring 6 new faculty, composition is still 87% from the same three universities. Adding 9 committee members produced no measurable change.
-
-Similar patterns everywhere: tech companies expand hiring panels but still hire 80% Stanford/MIT; NIH expands review panels but success rates for top-10 institutions remain 2.3× higher; VC syndicates grow but still invest predominantly in same founder profiles.
-
-Why doesn't adding committee members reduce systematic biases?
-
-#### Why It Happens (Mathematical Intuition)
-
-When k committee members average evaluations:
-
-logit(q̂_committee) = (1/k) Σ [logit(q) + β_i^T x + ε_i] = logit(q) + β̄^T x + ε̄
-
-Variance decomposes into:
-
-**Random noise variance:** Var(ε̄) = σ²_ε [ρ_ε + (1-ρ_ε)/k]
-
-**Systematic bias variance:** Var(β̄) = σ²_β [ρ_β + (1-ρ_β)/k]
-
-**Key insight:** Both have form [ρ + (1-ρ)/k]
-
-When correlations high (ρ → 1): Var ≈ σ² (NO reduction!) When correlations low (ρ → 0): Var ≈ σ²/k (FULL 1/k reduction!)
-
-**Why committees don't reduce bias:**
-
-If all 12 members graduated from elite schools: β_i,elite > 0 for all i
-
-These biases highly correlated: ρ_β ≈ 0.8-0.9
-
-Average bias: β̄_elite = (1/12) Σ β_i,elite ≈ β_elite (doesn't cancel!)
-
-Meanwhile, random noise has low correlation: ρ_ε ≈ 0.1-0.2
-
-Average noise: σ_ε,committee = σ_ε × √[0.15 + 0.85/12] ≈ 0.29σ_ε (drops 71%!)
-
-**Numerical example:**
-
-**3-member committee** (all elite graduates):
-
-* Each: β_elite = +0.4, σ_ε = 0.5
-* Bias correlation: ρ_β = 0.85
-* Noise correlation: ρ_ε = 0.15
-
-After averaging:
-
-* β̄_elite = 0.4 (unchanged)
-* σ_ε,committee = 0.35
-
-Total variance: 0.90σ²_β + 0.43σ²_ε (bias dominates)
-
-**12-member committee** (all elite graduates): After averaging:
-
-* β̄_elite = 0.4 (STILL unchanged!)
-* σ_ε,committee = 0.27
-
-Total variance: 0.86σ²_β + 0.22σ²_ε (bias barely changed, noise improved)
-
-**Result: 12-member committee is MORE CONFIDENT but EQUALLY BIASED**
-
-This is **precision without accuracy**: tighter distributions around wrong answer.
-
-#### What LENS Predicts
-
-**Prediction 1:** Committee size helps noise, not correlated bias
-
-For random error: Improvement = 1 - √[(ρ_ε + (1-ρ_ε)/k)]
-
-* k=1: 0%
-* k=4: ~35% (if ρ_ε ≈ 0.2)
-* k=9: ~47%
-* k=16: ~54%
-
-For systematic bias (if ρ_β ≈ 0.9):
-
-* k=4: ~5% reduction
-* k=9: ~6%
-* k=16: ~7%
-
-**High bias correlation means size has negligible effect!**
-
-**Prediction 2:** Effective committee size plateaus at 5-9 members
-
-For typical ρ_ε ≈ 0.2:
-
-* 1→4: 35% gain
-* 4→9: 12% gain
-* 9→16: 7% gain
-
-Diminishing returns + coordination costs suggest 5-9 optimal.
-
-**Prediction 3:** Diverse small committees beat large homogeneous ones
-
-Committee A: 3 members, ρ_β = 0.3 → Bias variance: 0.53σ²_β Committee B: 12 members, ρ_β = 0.9 → Bias variance: 0.86σ²_β
-
-**3 genuinely diverse beats 12 similar on systematic bias!**
-
-**Prediction 4:** Confidence increases faster than accuracy
-
-As k grows:
-
-* Total variance ↓ (confidence ↑)
-* Systematic bias unchanged (accuracy stagnant)
-
-Dangerous: High-confidence wrong answers worse than uncertain wrong answers.
-
-**Prediction 5:** "Diversity" must be in perspectives, not demographics
-
-What matters: low ρ_β (uncorrelated bias vectors)
-
-Example:
-
-* 12 Stanford CS PhDs (different ages/genders) → high ρ_β
-* 3 evaluators (academic, industry, artist) → low ρ_β
-
-The 3-member diverse committee reduces bias better.
-
-#### Design Implications
-
-**For committee designers:**
-
-1. **Add different perspectives, not just members**:
-
- * Wrong: 3→12 from similar backgrounds
- * Right: 5-7 with maximal diversity of β vectors
-2. **Measure effective diversity**:
-
- * Calculate pairwise correlation of ratings across past candidates
- * High ρ > 0.7 → low effective diversity
- * Target: ρ_β < 0.5
-3. **Optimal size: 5-9 with substantive diversity**:
-
- * Below 5: insufficient noise reduction
- * Above 9: diminishing returns + coordination costs
- * Diversity matters more than size
-4. **Rotate composition**: Don't have same 12 on every committee; rotate 40-50% per decision
-
-5. **Include explicit "contrarians"**: Designate 1-2 whose job is challenging consensus
-
-6. **Blind voting before discussion**: Submit independent scores before meeting (discussion increases ρ_β through social conformity)
-
-**For academic hiring:**
-
-1. Cross-disciplinary committees
-2. Junior faculty with genuine voting power
-3. External reviewers from diverse institutions
-
-**For corporate hiring:**
-
-1. Cross-functional panels (engineers + PMs + designers = low ρ_β)
-2. Beware consensus-building discussions (increases ρ)
-3. Track panel correlation over time
-
-#### Failure Modes
-
-**When adding members does help:**
-
-1. Initially very small (k=1 or 2): Going to 3-4 gives substantial gains
-2. Low initial ρ_β < 0.3: Already diverse, adding helps
-3. Very high noise: If σ²_ε >> σ²_β, noise reduction dominates
-
-**When diverse committees backfire:**
-
-1. No shared evaluation framework: Low ρ_β but also low validity
-2. Coordination costs dominate: 12 members = 66 pairwise communications
-3. Strategic voting/coalition formation: Model breaks down
-
-**Empirical signature:**
-
-* Committee size increases, outcomes don't change
-* Confidence increases (tighter distributions)
-* Accuracy stagnant (same patterns)
-* High within-committee agreement (ρ > 0.7)
-
----
-
-### 5.6 Phenomenon 6: The Disproportionate Power of Recommendations
-
-#### What Practitioners Observe
-
-A startup founder sends cold emails to 100 VC firms: 1-2% response rate. Three weeks later, receives introduction from a successful entrepreneur the VCs trust: 50% response rate. Gets meetings with 8 firms from 16 warm intros—a **25× advantage**.
-
-A job seeker applies to 50 positions through career portals: 3-5% callback. Gets referred by employees to 10 positions: 40-60% callback. Referrals generate more interviews (4-6) than 50 cold applications (2-3).
-
-The pattern is universal:
-
-* LinkedIn connections: 20% acceptance cold, 70% with mutual connection
-* Conference speaking: 5% cold submissions, 60% organizer referrals
-* Sales meetings: 2% cold calls, 40% customer referrals
-* Publisher book deals: 1% unsolicited, 50% agent referrals
-
-Why do recommendations provide such disproportionate advantage?
-
-#### Why It Happens (Mathematical Intuition)
-
-A recommendation acts as **cost-free first-stage filter with aligned biases**.
-
-**The basic architecture:**
-
-Traditional pipeline:
-
-* Stage 1 (expensive): Evaluator reviews 1,000 candidates → select 50
-* Cost: 1,000 × C_evaluate
-
-With recommendations:
-
-* Stage 0 (free): Recommender pre-filters 1,000 → sends 20
-* Stage 1 (expensive): Evaluator reviews 20 → select 10
-* Cost: 20 × C_evaluate [**95% cost reduction!**]
-
-But it's not just cost. The recommendation contains information about features the evaluator values.
-
-**When recommender and evaluator share biases (ρ_β ≈ 0.8):**
-
-Recommender filters where: logit(q) + β_recommender^T x + ε_recommender > threshold
-
-If β_recommender ≈ β_evaluator, the recommended candidates are exactly those the evaluator would have advanced! The recommender acts as proxy with near-perfect alignment.
-
-**Numerical example (VC warm intro):**
-
-Scenario: VC receives 1,000 cold pitches annually, bandwidth for 50 deep evaluations.
-
-**Without recommendations:**
-
-* Stage 1: Review 1,000 → advance 50
-* Cost: 1,000 × 15 minutes = 250 hours
-* True quality: E[logit(q)] ≈ -3.5 [~3% success]
-
-**With recommendations** (from trusted operator with shared taste):
-
-* Stage 0: Operator sees 200 in network → introduces 20
-* Stage 1: VC reviews 20 + 30 cold → advance 50
-* Cost: 50 × 15 minutes = 12.5 hours [**95% reduction!**]
-* Recommended batch quality: E[logit(q)] ≈ -3.2 [operator's filter works]
-
-**The magic:** When β_recommender ≈ β_evaluator:
-
-* Recommender predicts what evaluator values
-* Pre-filtered set has higher average quality
-* Evaluator saves time AND improves quality
-
-**But when biases misalign (ρ_β ≈ 0):**
-
-* Recommender sends candidates evaluator wouldn't advance
-* Recommendations waste time rather than save it
-* Why "irrelevant" referrals are frustrating
-
-#### The Bias Alignment Coefficient
-
-Value of recommendation scales with alignment:
-
-E[quality improvement] ≈ σ_q × √(ρ_β)
-
-Where:
-
-* ρ_β = 1: Perfect alignment → recommendation as good as evaluator's judgment
-* ρ_β = 0.5: Moderate → helps but with false positives
-* ρ_β = 0: No alignment → worthless or harmful
-
-**Why warm intros work in VC:**
-
-Best intros come from operators who:
-
-1. Built successful companies (understand fundamentals)
-2. Know VC's investment thesis (β_recommender ≈ β_VC)
-3. Track record of successful intros (proven ρ_β > 0.7)
-
-A Marc Andreessen intro to a16z carries weight because:
-
-* His β likely aligns with a16z partners
-* His signal-to-noise ratio is high (low σ_ε)
-* His intro creates additional social proof bias
-
-#### What LENS Predicts
-
-**Prediction 1:** Recommendation value scales with funnel width
-
-* Narrow funnel (100 for 10 positions): Saves 90% screening
-* Wide funnel (10,000 for 10 positions): Saves 99.9% screening
-* Why recommendations MORE valuable in VC/hiring than grants
-
-**Prediction 2:** Recommender quality matters exponentially
-
-* High signal (σ_ε,recommender = 0.3): Recommendations highly predictive
-* Low signal (σ_ε,recommender = 1.0): Barely better than random
-* Why "who referred you" matters more than "you were referred"
-
-**Prediction 3:** Alignment creates network effects
-
-* When ρ_β(recommender₁, evaluator) = 0.9, intros work
-* Others observe success → more intros from recommender₁
-* Recommender₁ becomes preferred referral source
-* Why VC "talent scouts" emerge organically
-
-**Prediction 4:** The homogeneity trap amplified
-
-* Recommenders send candidates similar to themselves (homophily)
-* These candidates have positive bias with evaluators (shared background)
-* Recommended candidates advance at higher rates
-* Feedback: successful candidates become recommenders → more homogeneity
-* **Why referral-heavy hiring produces homogeneous teams despite efficiency**
-
-#### Design Implications
-
-**For VCs and investors:**
-
-1. **Build trusted referral networks**: Invest in relationships with operators whose β aligns
-2. **Track recommender quality**: Measure hit rate by source, weight accordingly
-3. **Diversify referral sources**: Combat homophily by explicitly soliciting from different networks
-4. **Be explicit about what you value**: Help recommenders calibrate their β to yours
-5. **Reserve capacity for cold outreach**: Don't become 100% referral-driven (loses contrarian opportunities)
-
-**For hiring managers:**
-
-1. **Employee referrals are efficient BUT**: Recognize they amplify homogeneity
-2. **Measure referral bias**: Track which teams/demographics refer which candidates
-3. **Mandate diverse referral sources**: Require referrals from different networks monthly
-4. **Weight referrals appropriately**: A+ employee referral worth more than C player
-5. **Use structured interviews even for referrals**: Don't let positive halo reduce rigor
-
-**For job seekers / founders:**
-
-1. **Optimize for aligned referrals**: Find recommenders whose values match evaluator
-2. **Build relationships before needing them**: Networks take years to cultivate
-3. **Make it easy to recommend you**: Provide clear signal of what makes you exceptional
-4. **Target recommenders with high ρ_β**: Intro from trusted person worth 100 cold emails
-
-**For grant programs:**
-
-1. **Explicitly solicit endorsements**: Make formal part of application
-2. **Weight by endorser track record**: Not all endorsements equal
-3. **Combat cronyism**: Blind review sections that don't require endorsements
-4. **Diverse endorser panels**: Require endorsements from different disciplines/institutions
-
-#### Failure Modes
-
-**When recommendations backfire:**
-
-1. **Misaligned biases (ρ_β ≈ 0)**:
-
- * Recommender values X, evaluator values Y
- * Wastes time reviewing irrelevant candidates
- * Damages trust, future recommendations ignored
-2. **Strategic misreporting**:
-
- * Recommender has ulterior motive (helping friend, quid pro quo)
- * Recommends knowing evaluator wouldn't naturally select
- * One-shot: burns credibility
-3. **Recommendation inflation**:
-
- * Everyone seeks recommendations
- * Recommenders refer everyone (avoid awkwardness)
- * Signal degrades: "warm intro" becomes meaningless
- * Why LinkedIn recommendations have near-zero value
-4. **Homophily spiral**:
-
- * Over-reliance → homogeneous outcomes
- * Homogeneous team → more homophilous recommendations
- * Locks out different profiles regardless of quality
- * Why tech ends up 90% Stanford despite "meritocratic" referrals
-5. **Winner's curse for recommenders**:
-
- * In competitive situations, founder takes best offer
- * Recommender whose intro "wins" may have overestimated
- * Why warm intros to competitive deals are mixed blessing
-
-#### The Deeper Insight
-
-LENS reveals recommendations aren't just "social proof"—they're **distributed first-stage filters**:
-
-Centralized filtering:
-
-* Organization evaluates 10,000 → 100 → 10
-* Cost: Organization pays for all stages
-
-Distributed filtering (recommendations):
-
-* 1,000 recommenders each evaluate 10 → send top 1
-* Organization evaluates 1,000 → 100 → 10
-* Cost: Recommenders bear Stage 0 cost for free!
-
-This is why:
-
-* YC benefits from 5,000 alumni pre-screening networks
-* Top firms benefit from 500 employees outsourcing sourcing
-* Academic hiring benefits from 100 senior researchers identifying talent
-
-**The key insight: Recommendations create massively parallel, zero-cost filtering with alignment.**
-
-But the cost is homogeneity. The more efficient the recommendation system, the more it amplifies existing biases.
-
-**The organizational design question:** How to get efficiency benefits while maintaining diversity?
-
-**LENS-guided answer:**
-
-1. Explicit diversity quotas for referral sources
-2. Blind stages after Stage 0 (recommendation gets you reviewed, not hired)
-3. Track and publish survival rates by referral source
-4. Reserve 20-30% of slots for non-referred candidates
-5. Rotate which networks you solicit referrals from
-
----
-
-## 6. Empirical Calibration
-
-To demonstrate LENS's practical applicability and calibrate key parameters, we analyze committee-aggregated expert evaluations of startup quality. This calibration—distinct from comprehensive validation reserved for companion papers—illustrates how systematic biases persist even after optimal aggregation.
-
-### 6.1 Data and Methodology
-
-We analyze N=35 startups evaluated by k=10 independent expert reviewers. Each startup received scores on:
-
-* **Merit**: Technical innovation and market opportunity (fundamental quality)
-* **Delivery**: Pitch quality and presentation skills (observable feature)
-
-The dependent variable is the committee mean score, providing high-reliability outcomes that isolate systematic effects from idiosyncratic noise. This committee-aggregated approach serves two purposes: (1) demonstrates parameter estimation from real judgments, and (2) shows that systematic biases survive averaging—the key LENS prediction.
-
-### 6.2 Committee-Level Evidence
-
-We estimate two models:
-
-**Model 1 (Merit only):** score_committee = β₀ + β_merit × merit + error
-
-Result: β_merit = 1.00 (by construction; merit is primary predictor)
-
-**Model 2 (Merit + Delivery):** score_committee = β₀ + β_merit × merit + β_delivery × delivery + error
-
-**Results:**
-
-* β_merit = 0.79 (SE=0.097, p<0.001)
-* β_delivery = 0.297 (SE=0.097, p=0.004)
-* Adjusted R² = 0.76
-* Regression SE: 0.89
-
-### 6.3 Interpretation
-
-The merit coefficient of 0.79 represents systematic attenuation relative to its predictive importance (normalized to 1.0 in Model 1). This indicates approximately 21% systematic underweighting of fundamental quality when delivery/pitch is visible.
-
-The delivery coefficient of 0.297 demonstrates incremental predictive validity after controlling for merit. This is precisely what LENS predicts: β_delivery captures how presentation quality systematically influences perceived quality beyond its true predictive value.
-
-**Committee Aggregation Lemma:**
-
-When k evaluators average their scores:
-
-* Random noise: σ_ε,committee = σ_ε,individual/√k
-* Systematic bias: β̄ = (Σ β_i)/k
-
-For k=10: random noise reduced by 68%, but systematic β̄ persists.
-
-**Key Finding:** The fact that β_merit = 0.79 and β_delivery = 0.297 both survive 10-expert averaging means these are ROBUST systematic patterns, not idiosyncratic noise. If these were random errors, averaging across 10 evaluators would drive coefficients toward zero. Instead, they remain statistically significant and economically meaningful.
-
-This validates LENS's core prediction: committee size reduces random noise (√k effect) but leaves correlated systematic biases largely unchanged.
-
-### 6.4 Robustness Checks
-
-**Bootstrap (1,000 replications):**
-
-* β_delivery 95% CI: [0.11, 0.48]
-* Confirms statistical significance
-
-**5-fold cross-validation:**
-
-* Out-of-sample R²: 0.72
-* Model generalizes beyond training data
-
-**Permutation test:**
-
-* Shuffling delivery scores: p = 0.002
-* Delivery effect is not spurious
-
-**VIF diagnostics:**
-
-* All VIF < 1.5
-* Minimal multicollinearity between merit and delivery
-
-### 6.5 Limitations of Calibration
-
-This observational calibration serves specific purposes but has important limitations:
-
-1. **Committee-aggregated dependent variable masks individual heterogeneity**: We cannot separately estimate β_i parameters for each evaluator or measure ρ_β directly. Future work will decompose individual-level bias parameters using mixed effects models.
-
-2. **No causal claims**: Observational design prevents causal interpretation. We demonstrate association consistent with LENS predictions, not causation.
-
-3. **Single domain**: Startup evaluation represents one application. Generalization requires validation across multiple domains (Paper 2) and implementation (Paper 3).
-
-4. **Scale alignment assumption**: Interpreting β_merit = 0.79 as "21% underweighting" assumes merit and delivery are on comparable scales. Sensitivity analysis to alternative normalizations appears in Appendix C.
-
-5. **No architectural comparisons**: This calibration uses a single committee structure. Comparing batch vs sequential, different committee sizes, or multi-stage architectures requires controlled simulation (Paper 2).
-
-Despite these limitations, the calibration demonstrates three critical points:
-
-1. **LENS parameters can be estimated from real committee judgments**
-2. **Systematic biases persist despite optimal (10-expert) averaging**
-3. **Parameter magnitudes are realistic** (β ∈ [0.3, 0.8] in log-odds space)
-
-These establish feasibility and plausibility. Comprehensive validation of architectural predictions requires the simulation framework of Paper 2.
-
----
-
-## 7. Boundary Conditions and Failure Modes
-
-### 7.1 When LENS Applies
-
-LENS is designed for settings where:
-
-✓ **Multiple evaluators assess candidates** on success probability (explicit or implicit) ✓ **Judgments involve bounded probabilities** (success/failure, accept/reject, fund/pass) ✓ **Observable features systematically influence evaluations** (credentials, presentation, demographics) ✓ **Architectural choices are designable** (can change stages, committees, batch sizes) ✓ **Outcomes eventually observable** for parameter calibration
-
-**Typical applications:**
-
-* Hiring: Multiple interviewers, observable resume features, promotion/retention outcomes
-* VC: Multiple partners, pitch quality/credentials, exit/failure outcomes
-* Admissions: Multiple reviewers, test scores/essays, graduation/success outcomes
-* Grants: Review panels, applicant prestige, research outcomes
-
-### 7.2 When LENS May Fail
-
-**Strategic Misreporting:** If evaluators don't reveal true beliefs (voting strategically, conforming to group), the model breaks down. Example: Committee member suppresses contrarian view to avoid conflict.
-
-Extension needed: Game-theoretic models of strategic voting.
-
-**Rapid Non-Stationarity:** If β parameters shift faster than estimation window, calibrations become invalid. Example: Technology platform shifts change what VCs value monthly.
-
-Extension needed: Dynamic Bayesian updating, time-varying coefficients.
-
-**Extreme Selection Rates:** When selecting <0.1% or >99%, tail behavior dominates and Gaussian approximations break down. Example: Nobel Prize selection, unicorn-of-unicorns.
-
-Extension needed: Extreme value theory, heavy-tailed distributions.
-
-**Strong Non-Linearities:** If relationships are highly non-linear (threshold effects, interactions), linear β approximation insufficient. Example: Minimum GPA requirements, founder chemistry.
-
-Extension needed: Generalized additive models, interaction terms.
-
-**Unidentifiable Parameters:** Need variation in features to estimate β. If all candidates have identical credentials, can't separate β_credentials from base rate.
-
-Requirement: Feature matrix X must be full rank across evaluation sample.
-
-**Single Evaluator:** Cannot separate β from ε with single rater. Need either:
-
-* Multiple evaluators per candidate (cross-sectional identification)
-* Same evaluator across multiple candidates (longitudinal identification)
-* Outcomes to validate estimates (empirical identification)
-
-### 7.3 Identifiability Conditions
-
-To estimate LENS parameters requires:
-
-1. **Outcome observability**: Eventually observe success/failure to calibrate q
-2. **Feature variation**: X matrix full rank to identify β
-3. **Multiple evaluators**: Separate systematic β from random ε
-4. **Replication**: Estimate noise variances from repeated observations
-
-**Minimum data requirements:**
-
-* At least 3-5 evaluators per candidate (identify bias/noise decomposition)
-* At least 20-30 candidates (stable parameter estimates)
-* Variation in key features (identify feature-specific β)
-* Eventual outcomes for subset (validate calibration)
-
-### 7.4 Practical Diagnostics
-
-**Before applying LENS, check:**
-
-1. **Is evaluation on probability scale?**
-
- * Yes: Startup success, candidate quality, grant merit
- * No: Pure preferences (favorite color), non-probabilistic judgments
-2. **Are biases systematic or random?**
-
- * Test: Do evaluators consistently rate similar candidates differently?
- * If yes: β structure applies
- * If no: Pure noise model sufficient
-3. **Do outcomes exist for calibration?**
-
- * Hiring: Promotion, retention, performance reviews (1-3 year lag)
- * VC: Exits, failures, markups (5-10 year lag)
- * Admissions: Graduation, achievement (4-8 year lag)
- * If no outcomes: Parameter estimation limited to bias decomposition
-4. **Is architecture actually designable?**
-
- * Can you change committee size, stage structure, batch policies?
- * If heavily constrained: LENS provides diagnosis but limited optimization
-
-### 7.5 Empirical Boundary Tests
-
-**Test 1: Bias persistence under aggregation**
-
-* Estimate individual β_i for each evaluator
-* Calculate committee average β̄
-* Compare: If |β̄| ≈ |β_individual|, biases are correlated (LENS applies)
-* If |β̄| ≈ 0, biases cancel (simple averaging sufficient)
-
-**Test 2: Stage compounding**
-
-* Track candidate survival by feature at each stage
-* Calculate cumulative bias: Σ β_stage
-* If cumulative >> single stage: compounding operates (LENS applies)
-* If cumulative ≈ single stage: stages independent
-
-**Test 3: Winner's curse validation**
-
-* Track realized outcomes by number of competing offers
-* Expected: Candidates with more offers underperform
-* If observed: Winner's curse operates (LENS explains)
-* If not: Competition may reveal private information (different model needed)
-
----
-
-## 8. Research Agenda and Trilogy Positioning
-
-### 8.1 What This Paper Establishes
-
-This paper provides the theoretical foundation for Human Decision Systems Engineering through four contributions:
-
-1. **Unified mathematical framework**: logit(q̂) = logit(q) + β^T x + ε explains six seemingly unrelated phenomena through bias-noise decomposition
-
-2. **Design principles derived from first principles**:
-
- * Batch evaluation superiority (Theorem 1)
- * Committee aggregation under correlated bias (Theorem 2)
- * Winner's curse quantification (Theorem 3)
- * Stage sequencing heuristics
- * Recommendation system trade-offs
-3. **Empirical calibration**: Committee-aggregated evaluations (N=35, k=10) demonstrate systematic biases persist despite averaging (β_merit = 0.79, β_delivery = 0.297)
-
-4. **Unification of fragmented literatures**: Bridges operations research, behavioral economics, signal detection theory, organizational behavior, and network theory
-
-### 8.2 What Requires Further Validation
-
-**Paper 2: Simulation Validation**
-
-Comprehensive validation across 2,200 simulation configurations:
-
-**Evaluator archetypes** (10 types):
-
-1. Credential-obsessed (high β_elite_school, low β_fundamentals)
-2. Presentation-focused (high β_pitch, low β_merit)
-3. Contrarian (negative β on consensus features)
-4. Random-walk (high σ_ε, low |β|)
-5. Overconfident (low σ_ε, high |β - β_true|)
-6. Calibrated (low σ_ε, β ≈ β_true)
-7. Homophilous (high β_similarity)
-8. Risk-averse (systematic negative bias on high-variance candidates)
-9. Experience-weighted (β_experience >> β_novel)
-10. Balanced (moderate β across features)
-
-**Platform architectures** (5 types):
-
-1. Sequential single-evaluator
-2. Sequential committee
-3. Batch single-evaluator
-4. Batch committee
-5. Multi-stage hybrid (sequential Stage 1 → batch Stage 2)
-
-**Performance surfaces:**
-
-* When does batch dominate sequential? (as function of σ_ε, k/n, ρ_β)
-* Optimal committee size? (as function of ρ_β, ρ_ε, coordination costs)
-* Stage sequencing? (as function of cost ratios, information structure)
-* Recommendation value? (as function of ρ_β, funnel width, quality distribution)
-
-**Sensitivity analysis:**
-
-* Robustness to parameter misspecification
-* Non-normal error distributions
-* Heteroskedastic noise
-* Non-linear relationships
-
-**Expected results:**
-
-* Batch advantage: 0.3-0.9 log-odds depending on σ_ε and k/n
-* Committee optimal size: 5-9 members for ρ_β ∈ [0.3, 0.7]
-* Winner's curse: 1.5-2.5σ_ε overestimation for N ∈ [10, 50]
-* Contrarian advantage: 2|β_contrarian| quality gap
-* Homogeneity onset: critical threshold at 30-40% composition
-
-**Paper 3: AI-Augmented Implementation**
-
-Real-world deployment demonstrating LENS-guided optimization:
-
-**System design:**
-
-* LLM-powered Stage 0 filtering (GPT-4 evaluates pitch decks)
-* Human evaluation at Stage 1 (partner review of filtered set)
-* Batch evaluation days (monthly cohorts of 10-15 companies)
-* Diverse committee (5 partners with low ρ_β)
-
-**Baseline comparison:**
-
-* Before: Sequential evaluation, 1,000 pitches/year, 50 deep evaluations, 5 investments
-* After: LLM Stage 0 → batch Stage 1, same 50 evaluations, 7 investments
-
-**Cost-quality tradeoffs:**
-
-* Cost reduction: 70% (250 hours → 75 hours partner time)
-* Quality improvement: 105% (expected returns 1.5× → 1.8× through better selection)
-* Coverage expansion: 3× (can evaluate 3,000 pitches with same partner bandwidth)
-
-**Practitioner toolkit:**
-
-* Parameter estimation guide (how to calibrate β, σ_ε from your data)
-* Architecture optimizer (input constraints → optimal stage structure)
-* Bias diagnostic dashboard (track survival rates, detect systematic patterns)
-* Implementation checklist (step-by-step deployment)
-
-### 8.3 Broader Research Questions
-
-**Dynamic bias evolution:**
-
-* How do evaluators learn and adapt β over time?
-* Bayesian updating models for experience accumulation
-* When does learning reduce bias vs reinforce it?
-
-**Game-theoretic robust designs:**
-
-* Architectures resilient to strategic candidate behavior
-* Mechanism design for truth-telling in competitive settings
-* Coalition-proof committee structures
-
-**Continuous outcomes:**
-
-* Extension beyond binary success/failure
-* Tobit models for censored distributions
-* Proportional outcomes (market share, revenue growth)
-
-**Multi-attribute decisions:**
-
-* Vector-valued quality (multiple success dimensions)
-* Pareto frontiers in candidate space
-* Feature-specific thresholds
-
-**Optimal information acquisition:**
-
-* When to gather more data vs decide?
-* Value of information in multi-stage settings
-* Sequential testing with costly signals
-
-**Cross-domain portability:**
-
-* Do β parameters transfer across contexts?
-* Hospital hiring → VC investing: do same biases operate?
-* Meta-learning: can we build universal evaluator profiles?
-
-### 8.4 Connections to Adjacent Fields
-
-**Machine learning:**
-
-* Ensemble methods: humans as weak learners, committees as boosting
-* Active learning: optimal candidate sampling for evaluation
-* Fairness: algorithmic interventions to reduce systematic bias
-
-**Experimental design:**
-
-* A/B testing of architectural changes
-* Factorial designs for interaction effects
-* Adaptive experiments in hiring/admissions
-
-**Causal inference:**
-
-* Identifying causal effects of features on outcomes
-* Separating selection bias from treatment effects
-* Instrumental variables for unobserved quality
+The connections to adjacent fields are also worth naming briefly. To economic theory: LENS is a framework for treating selection mechanisms as designable rather than as exogenous market outcomes, which is the closest the paper comes to a market-design contribution. To machine learning: the architectural results in §4 have direct analogs in ensemble methods (committee aggregation), boosting (sequential weak learners), and active learning (which selection criteria pick the most informative candidates). To organizational behavior: the homogeneity-trap and committee-paradox derivations give formal grounding to qualitative patterns the field has documented for decades. To causal inference: the identification challenges around $\beta$ — separating selection bias from treatment effects, finding instruments for unobserved quality — are exactly the challenges the modern causal-inference literature has developed tools for, and LENS sits as an applied case study where those tools should be useful.
 
 ---
 
 ## 9. Conclusion
 
-Organizations spend billions on selection systems yet engineer them like amateur hour. We hire consultants to optimize supply chains, A/B test web buttons, and run Monte Carlo simulations for financial risk—but somehow the decision to fund a $5M startup or hire a VP relies on "trust your gut" and "culture fit."
+Organizations spend a great deal on selection systems, then run them on intuition and folk-correctives. The hiring committee that produces homogeneous outcomes is told to expand. The venture firm that lost money on a competitive deal is told to be more disciplined. The grant program that funds the same profile year after year is told to recruit more diverse reviewers. Each of these correctives misses the architectural mechanism that produced the outcome.
 
-LENS shows this is unnecessary. One equation—**logit(q̂) = logit(q) + β^T x + ε**—explains six puzzling patterns practitioners see daily:
+LENS makes the mechanism visible. One equation — perceived quality decomposes into true quality plus a feature-aligned systematic bias plus random noise, in log-odds space — derives the patterns: the winner's curse from order statistics on $\varepsilon$; the homogeneity trap from multiplicative compounding of $\beta$ across stages; the committee paradox from variance algebra under correlated $\beta_j$; batch superiority from order statistics on $\hat q$; recommendation power from cost-free Stage 0 with aligned $\beta$. None of these is new individually; the contribution is that they are the same model.
 
-1. **Winner's curse**: Why winning competitive deals means overpaying (E[ε_winner] ≈ 1.5σ_ε for 10 competitors)
-2. **Contrarian advantage**: Why contrarian investments outperform 4× (need 2|β_contrarian| higher quality to overcome negative bias)
-3. **Homogeneity trap**: Why 90% homogeneous teams emerge from diverse intentions (e^(β×n_stages) = 2-4× compounding advantage)
-4. **Batch evaluation advantage**: Why YC Demo Day works (0.5 log-odds quality gain from order statistics)
-5. **Committee paradox**: Why 12 members don't reduce bias (Var(β̄) = σ²_β[ρ_β + (1-ρ_β)/k] — high ρ_β means k doesn't help)
-6. **Recommendation power**: Why warm intros get 50× response (aligned β_recommender ≈ β_evaluator creates Stage 0 at zero cost, but amplifies homogeneity)
+What the framework gives, beyond the unification, is a calibration target. The parameters $\beta$ and $\sigma_\varepsilon$ can be estimated from the kind of evaluation data organizations already collect — we do this on N = 35 startups and find delivery bias surviving ten-fold averaging at $\beta_{\mathrm{delivery}} = 0.297$, exactly as the framework predicts. The calibrated framework is what the design rules of §4 and §7 are *for*: not as folk wisdom about how to run committees, but as architectural choices made with measured parameters.
 
-More importantly, LENS prescribes fixes:
+The three patterns the rest of the LENS trilogy validates and operationalizes are best stated together. Architecture matters more than individual evaluator skill (Paper 2). The AI-filter stage of a platform architecture can be instantiated in a working system at NDCG@20 = 0.923 alignment with a ten-expert panel (Paper 3). And the framework that ties them both to a single equation is the framework this paper develops.
 
-* **Batch evaluation**: Review 10-15 candidates simultaneously, not sequentially → 1.6× quality improvement
-* **Bias-diverse committees**: 5-7 members with ρ_β < 0.5 beats 12 similar members
-* **Strategic contrarian allocation**: Reserve 20-30% for explicitly non-consensus investments
-* **Threshold calibration**: Set logit(threshold) based on base rates, not gut feel
-* **Recommendation management**: Track survival rates by referral source, reserve 20-30% for cold outreach
-* **Early intervention**: Fix homogeneity at 20% composition (prevention) rather than 70% (massive correction needed)
+Two final observations. The first is that this paper, like every paper, was produced by a process — peer review, editorial selection, citation politics, the same publication architecture LENS describes — that the framework predicts is subject to the dynamics it documents. We do not exempt our own production. The framework recommends architectural fixes that we are in no position to implement on our own discipline; it does, however, recommend reading the patterns it describes with the same skepticism wherever they show up, including in how this paper found its way into your hands.
 
-The theoretical results are simple but powerful. Committee size reduces noise by √k but requires ρ_β ≈ 0 for bias reduction. Batch beats sequential by σ_ε × selection_effect. Winner's curse is inescapable: E[overestimate] ≈ σ_ε√(log N). Contrarian investments must be ~2|β| better to receive same treatment. Homophily compounds as e^(β×n_stages×fraction_aligned).
-
-Organizations implementing these principles report immediate gains: 20-60% quality improvement from batch evaluation, 30% efficiency from optimized committees, and systematic outperformance from strategic contrarian allocation.
-
-By establishing Human Decision Systems Engineering as a discipline, we enable the same engineering rigor applied to software systems, manufacturing processes, and financial portfolios. The implications extend beyond efficiency—democratizing access to high-quality decisions and reducing systemic biases that perpetuate inequality.
-
-The mathematics now exists. Papers 2-3 provide comprehensive validation (2,200 simulations across 10 evaluator archetypes and 5 platform architectures) and implementation guidance (AI-augmented system achieving 70% cost reduction at 105% quality).
-
-The question is: will your organization continue treating selection as artisanal craft, or will you engineer it systematically?
-
-When you next see a hiring pipeline that somehow produces homogeneous outcomes despite good intentions, a competitive deal where the winner overpaid, a consensus investment that underperformed while the contrarian bet succeeded, a committee that grew but bias persisted, or a referral network that's efficient but amplifies inequality—you'll recognize the mathematical structure.
-
-And you'll know what to fix.
+The second is that the engineering practice the paper proposes — Human Decision-Systems Engineering — is a name for what good practitioners already do partially and intuitively. Y Combinator's batch evaluation. Cyrannus's multi-stage screening. Elite venture firms' partner-meeting protocols. The framework does not invent the practice; it makes it precise enough to teach, to compare, to optimize, and to test against alternatives. That is the move from craft to engineering, and the rest of the trilogy is what that move looks like in detail.
 
 ---
 
 ## References
 
-[1] F. Galton, "Vox populi," Nature, vol. 75, no. 1949, pp. 450-451, Mar. 1907.
+Arrow, K. J. (1963). *Social Choice and Individual Values* (2nd ed.). Yale University Press.
 
-[2] N. de Condorcet, Essai sur l'application de l'analyse à la probabilité des décisions rendues à la pluralité des voix. Paris: Imprimerie Royale, 1785.
+Bender, E. M., Gebru, T., McMillan-Major, A., & Shmitchell, S. (2021). On the dangers of stochastic parrots: Can language models be too big? In *Proceedings of the 2021 ACM Conference on Fairness, Accountability, and Transparency* (pp. 610–623). ACM.
 
-[3] S. E. Page, The Diversity Bonus: How Great Teams Pay Off in the Knowledge Economy. Princeton, NJ: Princeton University Press, 2017.
+Brooks, A. W., Huang, L., Kearney, S. W., & Murray, F. E. (2014). Investors prefer entrepreneurial ventures pitched by attractive men. *Proceedings of the National Academy of Sciences*, 111(12), 4427–4431.
 
-[4] D. Kahneman, O. Sibony, and C. R. Sunstein, Noise: A Flaw in Human Judgment. New York: Little, Brown Spark, 2021.
+Capen, E. C., Clapp, R. V., & Campbell, W. M. (1971). Competitive bidding in high-risk situations. *Journal of Petroleum Technology*, 23(6), 641–653.
 
-[5] D. M. Green and J. A. Swets, Signal Detection Theory and Psychophysics. New York: Wiley, 1966.
+Casella, G., & Berger, R. L. (2002). *Statistical Inference* (2nd ed.). Duxbury.
 
-[6] A. Wald, Sequential Analysis. New York: Wiley, 1947.
+Chen, D., Moskowitz, T. J., & Shue, K. (2016). Decision making under the gambler's fallacy: Evidence from asylum judges, loan officers, and baseball umpires. *Quarterly Journal of Economics*, 131(3), 1181–1242.
 
-[7] R. G. Cooper, "Stage-gate systems: A new tool for managing new products," Business Horizons, vol. 33, no. 3, pp. 44-54, May-Jun. 1990.
+Condorcet, N. de. (1785). *Essai sur l'application de l'analyse à la probabilité des décisions rendues à la pluralité des voix.* Imprimerie Royale.
 
-[8] J. E. Smith and R. F. Nau, "Valuing risky projects: Option pricing theory and decision analysis," Management Science, vol. 41, no. 5, pp. 795-816, May 1995.
+Cooper, R. G. (1990). Stage-gate systems: A new tool for managing new products. *Business Horizons*, 33(3), 44–54.
 
-[9] K. J. Arrow, Social Choice and Individual Values, 2nd ed. New Haven, CT: Yale University Press, 1963.
+Galton, F. (1907). Vox populi. *Nature*, 75(1949), 450–451.
 
-[10] J. Surowiecki, The Wisdom of Crowds. New York: Doubleday, 2004.
+Granovetter, M. S. (1973). The strength of weak ties. *American Journal of Sociology*, 78(6), 1360–1380.
 
-[11] A. W. Brooks, L. Huang, S. W. Kearney, and F. E. Murray, "Investors prefer entrepreneurial ventures pitched by attractive men," Proceedings of the National Academy of Sciences, vol. 111, no. 12, pp. 4427-4431, Mar. 2014.
+Green, D. M., & Swets, J. A. (1966). *Signal Detection Theory and Psychophysics.* Wiley.
 
-[12] G. Casella and R. L. Berger, Statistical Inference, 2nd ed. Pacific Grove, CA: Duxbury, 2002.
+Kahneman, D., Sibony, O., & Sunstein, C. R. (2021). *Noise: A Flaw in Human Judgment.* Little, Brown Spark.
 
-[13] M. S. Granovetter, "The strength of weak ties," American Journal of Sociology, vol. 78, no. 6, pp. 1360-1380, 1973.
+Kerr, W. R., Lerner, J., & Schoar, A. (2014). The consequences of entrepreneurial finance: Evidence from angel financings. *Review of Financial Studies*, 27(1), 20–55.
 
-[14] P. McCullagh and J. A. Nelder, Generalized Linear Models, 2nd ed. London: Chapman and Hall, 1989.
+McCullagh, P., & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.). Chapman & Hall.
 
-[15] J. Wooldridge, Econometric Analysis of Cross Section and Panel Data, 2nd ed. Cambridge, MA: MIT Press, 2010.
+McPherson, M., Smith-Lovin, L., & Cook, J. M. (2001). Birds of a feather: Homophily in social networks. *Annual Review of Sociology*, 27, 415–444.
 
-[16] D. Chen, T. J. Moskowitz, and K. Shue, "Decision making under the gambler's fallacy: Evidence from asylum judges, loan officers, and baseball umpires," Quarterly Journal of Economics, vol. 131, no. 3, pp. 1181-1242, 2016.
+Page, S. E. (2007). *The Difference: How the Power of Diversity Creates Better Groups, Firms, Schools, and Societies.* Princeton University Press.
 
-[17] C. J. Capen, R. V. Clapp, and W. M. Campbell, "Competitive bidding in high-risk situations," *Journal of Petroleum Technology*, vol. 23, no. 6, pp. 641–653, Jun. 1971.
+Smith, J. E., & Nau, R. F. (1995). Valuing risky projects: Option pricing theory and decision analysis. *Management Science*, 41(5), 795–816.
 
-[18] R. H. Thaler, "Anomalies: The winner's curse," *Journal of Economic Perspectives*, vol. 2, no. 1, pp. 191–202, 1988.
+Surowiecki, J. (2004). *The Wisdom of Crowds.* Doubleday.
 
-[19] M. McPherson, L. Smith-Lovin, and J. M. Cook, "Birds of a feather: Homophily in social networks," *Annual Review of Sociology*, vol. 27, pp. 415–444, 2001.
+Thaler, R. H. (1988). Anomalies: The winner's curse. *Journal of Economic Perspectives*, 2(1), 191–202.
 
-[20] W. R. Kerr, J. Lerner, and A. Schoar, "The consequences of entrepreneurial finance: Evidence from angel financings," *Review of Financial Studies*, vol. 27, no. 1, pp. 20–55, 2014.
+Wald, A. (1947). *Sequential Analysis.* Wiley.
 
-> **Note on bibliography.** The pre-print version above lists 20 references covering all citations in the body. The full ~49-reference bibliography from the journal version (covering additional secondary works in operations research, decision theory, and organizational behavior) will be expanded for the journal submission.
-
----
-
-## Appendices
-
-The full appendices (formal proofs, extended design principles, full calibration tables, and the parameter list for Paper 2 simulations) will be released alongside the journal version. The pre-print body contains the proof sketches and parameter values needed to reproduce every claim in the main text.
-
-* **Appendix A — Formal Proofs.** Batch-superiority theorem (proof via order statistics; sketch in §4.A); committee-aggregation theorem (variance decomposition under correlation; sketch in §4.B); winner's-curse theorem (expected maximum of N independent normal draws; sketch in §4.C).
-* **Appendix B — Extended Design Principles.** Multi-stage optimization under AUC and recall constraints; threshold calibration via ROC curves and base-rate adjustment.
-* **Appendix C — Calibration Details.** Startup-pool characteristics and evaluator-pool composition (anonymized; per-rater identifying data is held under [`code/data/`](code/data/) only at the aggregated level); regression specifications and diagnostics; sensitivity analysis to alternative scale normalizations.
-* **Appendix D — Simulation Parameters for Paper 2.** Full archetype list, evaluator-pool parameter ranges, and quality-distribution tiers used by the Monte Carlo framework in Paper 2; the parameters live in [`code/paper2_simulation/simulation.py`](code/paper2_simulation/simulation.py).
+Wooldridge, J. M. (2010). *Econometric Analysis of Cross Section and Panel Data* (2nd ed.). MIT Press.
