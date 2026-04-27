@@ -14,17 +14,18 @@ A research trilogy formalizing how multi-stage human selection systems work and 
 
 ```
 .
-├── README.md                  ← you are here
-├── lens_trilogy.md            ← integrated synthesis of all three papers
-├── edit_plan.md               ← editorial checklist for paper{1,2,3}_v2
-├── 1 LENS_…(2).md             ← Paper 1 draft
-├── 2 The Platform Paradox…(1).md  ← Paper 2 draft
-├── 3. Instruction Distillation…md ← Paper 3 draft
+├── README.md                              ← you are here
+├── lens_trilogy.md                        ← integrated synthesis of all three papers
+├── edit_plan.md                           ← editorial checklist
+├── papers/
+│   ├── paper1_lens.md                     ← Paper 1: framework
+│   ├── paper2_platform_paradox.md         ← Paper 2: simulation
+│   └── paper3_instruction_distillation.md ← Paper 3: empirical
 └── code/
-    ├── README.md              ← code-tree map and run instructions
+    ├── README.md                          ← code-tree map and run instructions
     ├── requirements.txt
-    ├── data/                  ← anonymized inputs (no startup identities)
-    ├── shared/                ← canonical perception model
+    ├── data/                              ← anonymized inputs (no startup identities)
+    ├── shared/                            ← canonical perception model
     ├── paper1_calibration/
     ├── paper2_simulation/
     └── paper3_llm_eval/

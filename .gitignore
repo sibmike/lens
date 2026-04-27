@@ -4,11 +4,8 @@ pitch_review/
 pitch_review_simulation/
 guidelines/
 
-# Original draft papers (kept locally; v2 versions ship in their place — see edit_plan.md)
-# Uncomment if/when the originals are intentionally re-included:
-# 1\ LENS_*.md
-# 2\ The\ Platform\ Paradox*.md
-# 3.\ Instruction\ Distillation*.md
+# Local-only working documents (drafts, style guides, internal notes)
+docs/
 
 # Secrets
 .env
