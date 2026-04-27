@@ -180,7 +180,7 @@ The expert-time bottleneck at the screening stage of venture capital has a speci
 
 The architectural framing matters. The LLM is not deciding which startups to fund. It is filtering for whether a pitch contains the substantive content an expert would otherwise have to extract, and reordering the queue so that the top of the human reviewer's list is more likely to be pitches the human would have prioritized anyway. The expert remains the decision-maker. The model is a stage-zero filter that operates on observable surface content and frees the next stage to focus on substance.
 
-This is the operational instantiation of Paper 2's "AI filter" stage. Paper 2 modeled that stage as an idealized low-noise, low-bias filter and showed that platforms with such a filter outperformed elite VCs by 11.5% on portfolio quality. This paper measures what the real version of that filter actually achieves; the σ_AI calibration in Paper 2's §5.7 sensitivity analysis is the bridge.
+This is the operational instantiation of Paper 2's "AI filter" stage. Paper 2 modeled that stage as an idealized low-noise, low-bias filter and showed that platforms with such a filter outperformed elite VCs by 11.4% on portfolio quality. This paper measures what the real version of that filter actually achieves; the σ_AI calibration in Paper 2's §5.6 sensitivity analysis is the bridge.
 
 ### 5.2 The Generalizability of Instruction Distillation
 
