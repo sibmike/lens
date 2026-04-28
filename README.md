@@ -1,6 +1,6 @@
 # LENS — Layered Evaluation with Noise and Systematic-bias
 
-> A founder pitches to ten venture firms. Three offer term sheets. The founder accepts the highest. Two years later the startup fails, and the winning firm runs a post-mortem: *why do we keep losing money on deals we win?*
+> A buzzy startup runs a competitive round and ends up with three term sheets. The founder accepts the highest. Two years later the startup fails, and the winning firm runs a post-mortem: *why do we keep losing money on the competitive deals we win?*
 >
 > Across town, an HR executive runs a recruiting initiative explicitly designed for diversity. Blind résumé screens. Broadened outreach. Three years later the engineering team is 90% from the same demographic and the same three schools.
 >
